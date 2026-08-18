@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.together.ai)",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebFetch(domain:pollinations.ai)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:huggingface.co)",
+      "WebFetch(domain:replicate.com)",
+      "WebFetch(domain:aistudio.google.com)",
+      "WebFetch(domain:www.gnu.org)",
+      "Bash(./verify.sh)",
+      "Bash(bash /home/ahssaini/podauto/verify.sh)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(chmod 600 .env)",
+      "Bash(python -m pytest tests/test_imagegen.py -q)"
+    ]
+  }
+}

@@ -1,0 +1,175 @@
+{
+  "_meta": {
+    "version": 1,
+    "last_reviewed": "2026-08-10",
+    "refresh_cadence_days": 30,
+    "note": "SCAFFOLD -- illustrative, NOT exhaustive. New IP appears constantly and a list written today is measurably worse in four months. Add trending IP on the refresh cadence; treat last_reviewed as a staleness alarm, not decoration.",
+    "what_this_is": "A keyword screen. It finds terms it knows about. It does NOT clear anything -- a clean pass means 'no flags found', never 'safe to publish'. Trademark turns on likelihood of confusion, not string equality, so a near-miss like 'Star Warz' will pass this screen and still infringe.",
+    "tiers": {
+      "1_hard_block": "No legitimate generic use on apparel. Never reaches the human review queue.",
+      "2_co_occurrence": "Ordinary English words that are also marks. Fires only alongside a companion term, so 'apple pie' passes and 'apple iphone' does not. Routes to human review.",
+      "3_patterns": "Regex families that mimic licensed-merchandise conventions. Routes to human review."
+    }
+  },
+
+  "tier_1_hard_block": {
+    "franchises_and_studios": [
+      "disney", "pixar", "marvel", "dc comics", "star wars", "harry potter",
+      "pokemon", "nintendo", "playstation", "xbox", "netflix", "hbo",
+      "game of thrones", "stranger things", "the mandalorian", "jurassic park",
+      "lord of the rings", "hunger games", "twilight saga", "fast and furious",
+      "ghostbusters", "transformers", "my little pony", "paw patrol",
+      "sesame street", "looney tunes", "scooby doo", "spongebob",
+      "rick and morty", "south park", "family guy", "the simpsons"
+    ],
+    "characters": [
+      "mickey mouse", "minnie mouse", "donald duck", "goofy", "pluto disney",
+      "elsa frozen", "olaf frozen", "spiderman", "spider man", "iron man",
+      "captain america", "black panther marvel", "hulk marvel", "thor marvel",
+      "batman", "superman", "wonder woman", "joker dc", "harley quinn",
+      "darth vader", "yoda", "baby yoda", "grogu", "luke skywalker",
+      "pikachu", "charizard", "mario bros", "luigi", "sonic hedgehog",
+      "hello kitty", "winnie the pooh", "peppa pig", "bluey",
+      "bugs bunny", "tweety bird", "tasmanian devil"
+    ],
+    "brands": [
+      "nike", "adidas", "puma", "reebok", "under armour", "lululemon",
+      "gucci", "louis vuitton", "chanel", "prada", "versace", "balenciaga",
+      "coca cola", "pepsi", "red bull", "monster energy", "starbucks",
+      "mcdonalds", "burger king", "kfc", "in n out",
+      "harley davidson", "jeep", "tesla", "ferrari", "lamborghini",
+      "john deere", "caterpillar", "yeti coolers",
+      "playboy", "hooters", "jack daniels", "budweiser", "corona extra"
+    ],
+    "sports": [
+      "nfl", "nba", "mlb", "nhl", "fifa", "uefa", "olympics", "olympic",
+      "super bowl", "world series", "stanley cup", "march madness",
+      "premier league", "nascar", "wwe", "ufc",
+      "yankees", "lakers", "cowboys nfl", "patriots nfl", "packers nfl",
+      "manchester united", "real madrid", "barcelona fc"
+    ],
+    "slogans": [
+      "just do it", "think different", "i'm lovin it", "have it your way",
+      "finger lickin good", "melts in your mouth", "breakfast of champions",
+      "the happiest place on earth", "may the force be with you",
+      "wakanda forever", "avengers assemble", "winter is coming",
+      "live long and prosper", "to infinity and beyond", "hakuna matata"
+    ]
+  },
+
+  "tier_2_co_occurrence": [
+    {
+      "term": "frozen",
+      "companions": ["let it go", "elsa", "anna", "olaf", "arendelle", "snow queen"],
+      "note": "Frozen pipes, frozen food, frozen shoulder are all legitimate."
+    },
+    {
+      "term": "apple",
+      "companions": ["iphone", "macbook", "ipad", "airpods", "ios", "app store"],
+      "note": "Apple pie, apple orchard, apple picking are legitimate."
+    },
+    {
+      "term": "supreme",
+      "companions": ["box logo", "streetwear", "hypebeast", "drop"],
+      "note": "Supreme court, supreme pizza, supreme confidence are legitimate."
+    },
+    {
+      "term": "shell",
+      "companions": ["gasoline", "petroleum", "oil company", "gas station"],
+      "note": "Seashell, shell collecting, nutshell are legitimate."
+    },
+    {
+      "term": "dove",
+      "companions": ["soap", "body wash", "deodorant", "real beauty"],
+      "note": "The bird, peace dove, mourning dove are legitimate."
+    },
+    {
+      "term": "patagonia",
+      "companions": ["fleece", "outdoor gear", "worn wear"],
+      "note": "The geographic region in South America is legitimate."
+    },
+    {
+      "term": "amazon",
+      "companions": ["prime", "alexa", "aws", "echo dot"],
+      "note": "The river and the rainforest are legitimate."
+    },
+    {
+      "term": "subway",
+      "companions": ["sandwich", "footlong", "eat fresh"],
+      "note": "Underground trains, subway station are legitimate."
+    },
+    {
+      "term": "corona",
+      "companions": ["beer", "extra", "cerveza", "lime"],
+      "note": "Solar corona, corona discharge are legitimate."
+    },
+    {
+      "term": "polo",
+      "companions": ["ralph lauren", "pony logo"],
+      "note": "The sport, water polo, polo shirt as a garment type are legitimate."
+    },
+    {
+      "term": "champion",
+      "companions": ["reverse weave", "c logo", "athleticwear brand"],
+      "note": "Champion as an ordinary noun is extremely common and legitimate."
+    },
+    {
+      "term": "north face",
+      "companions": ["jacket", "puffer", "never stop exploring"],
+      "note": "The north face of a mountain is a legitimate mountaineering phrase."
+    },
+    {
+      "term": "guess",
+      "companions": ["denim", "triangle logo", "fashion brand"],
+      "note": "The verb is everywhere. Very high false-positive risk."
+    },
+    {
+      "term": "coach",
+      "companions": ["handbag", "leather goods", "signature c"],
+      "note": "Sports coach, life coach, coach bus are legitimate."
+    },
+    {
+      "term": "gap",
+      "companions": ["old navy", "banana republic", "denim brand"],
+      "note": "Ordinary noun. Very high false-positive risk."
+    }
+  ],
+
+  "tier_3_patterns": [
+    {
+      "id": "property_of",
+      "regex": "\\bproperty of\\s+\\w+",
+      "reason": "Mimics licensed collegiate and team merchandise conventions."
+    },
+    {
+      "id": "athletic_dept",
+      "regex": "\\b(athletic|athletics)\\s+(dept|department)\\b",
+      "reason": "Collegiate licensing lockup."
+    },
+    {
+      "id": "est_year_collegiate",
+      "regex": "\\best\\.?\\s*(18|19|20)\\d{2}\\b",
+      "reason": "Institutional founding-date format used on licensed goods. Often benign -- human decides."
+    },
+    {
+      "id": "university_of",
+      "regex": "\\buniversity of\\s+\\w+",
+      "reason": "Named institutions license their marks."
+    },
+    {
+      "id": "official_licensed",
+      "regex": "\\b(official|officially licensed|authentic)\\b.*\\b(merch|merchandise|product|gear)\\b",
+      "reason": "Claims a licensing relationship that does not exist."
+    },
+    {
+      "id": "trademark_symbols",
+      "regex": "[\\u00ae\\u2122\\u00a9]",
+      "reason": "Registered/trademark/copyright symbols in listing text."
+    },
+    {
+      "id": "team_city_sport",
+      "regex": "\\b\\w+\\s+(football|basketball|baseball|hockey)\\s+(club|team)\\b",
+      "reason": "City-plus-sport constructions frequently name a real franchise."
+    }
+  ]
+}

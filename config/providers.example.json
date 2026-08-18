@@ -1,0 +1,150 @@
+{
+  "_meta": {
+    "note": "COMMITTABLE TEMPLATE. Copy to config/providers.json (gitignored) and fill in your own determinations. Every provider here is disabled and every commercial_use_confirmed is false, so a fresh clone generates nothing until you decide otherwise -- verify.sh asserts that. The endpoints, api_shapes and models for the three hf_* / huggingface routes were verified against live calls on 2026-08-16 and are correct as written; what is NOT filled in for you is the licence determination.",
+    "keys_note": "A 'keys' entry names an ENVIRONMENT VARIABLE -- never the credential itself. Values live in .env (chmod 600, gitignored). Rotator.from_files() refuses to start if a value here looks like a credential.",
+    "commercial_use_warning": "commercial_use_confirmed is skipped-unless-true by the rotator. It is your determination to record, made after reading BOTH the model licence and the service terms. Where it is true below, licence_notes still needs replacing with what was actually checked.",
+    "output_spec": {
+      "target_px": [
+        4500,
+        5400
+      ],
+      "aspect": "5:6",
+      "note": "Generate at the provider's best native size in 5:6 (e.g. 848x1024 or 1016x1216 -- 8px grid, within 1% of 5:6). 832x1024 is 2.5% off 5:6 and image QA rejects it. Do NOT ask for 4500x5400 directly. Upscale happens in the vectorize stage."
+    }
+  },
+  "rotation": {
+    "order": [
+      "hf_nscale",
+      "hf_together",
+      "huggingface",
+      "pollinations",
+      "cloudflare",
+      "gemini",
+      "together"
+    ],
+    "on_quota_exhausted": "next_key_then_next_provider",
+    "on_http_429": "cooldown_key_and_advance",
+    "on_http_5xx": "retry_same_key_twice_then_advance",
+    "cooldown_seconds": 900,
+    "max_attempts_per_image": 6
+  },
+  "providers": {
+    "hf_nscale": {
+      "enabled": false,
+      "endpoint": "https://router.huggingface.co/nscale/v1/images/generations",
+      "auth": "bearer",
+      "api_shape": "openai_images",
+      "model": "black-forest-labs/FLUX.1-schnell",
+      "keys": [
+        "HF_NSCALE_API_KEY"
+      ],
+      "daily_quota": null,
+      "per_minute_quota": null,
+      "max_resolution": "1024x1024",
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. FLUX.1-schnell weights are apache-2.0 (Hub model card); the HF Inference Providers terms and nscale's own terms are separate and unread. Returns lossless PNG at the requested size.",
+      "trains_on_inputs": null,
+      "route_note": "Shares one real token with hf_together and huggingface. The ledger tracks them as separate provider:key pairs, so a quota wall is discovered once per route rather than once per account."
+    },
+    "hf_together": {
+      "enabled": false,
+      "endpoint": "https://router.huggingface.co/together/v1/images/generations",
+      "auth": "bearer",
+      "api_shape": "openai_images",
+      "model": "black-forest-labs/FLUX.1-schnell",
+      "keys": [
+        "HF_TOGETHER_API_KEY"
+      ],
+      "daily_quota": null,
+      "per_minute_quota": null,
+      "max_resolution": "1024x1024",
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Same apache-2.0 FLUX.1-schnell weights as hf_nscale, but this route returns JPEG -- lossy, so prefer it as fallback only.",
+      "trains_on_inputs": null
+    },
+    "pollinations": {
+      "enabled": false,
+      "endpoint": "https://image.pollinations.ai/prompt/{prompt}",
+      "auth": "none",
+      "api_shape": "url_prompt",
+      "model": "flux",
+      "keys": [
+        "POLLINATIONS_API_KEY"
+      ],
+      "daily_quota": null,
+      "per_minute_quota": null,
+      "max_resolution": null,
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Unverified.",
+      "trains_on_inputs": null
+    },
+    "cloudflare": {
+      "enabled": false,
+      "endpoint": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell",
+      "auth": "bearer",
+      "api_shape": "cloudflare_ai_run",
+      "account_id": "",
+      "model": "@cf/black-forest-labs/flux-1-schnell",
+      "keys": [],
+      "daily_quota": null,
+      "per_minute_quota": null,
+      "max_resolution": null,
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. FLUX.1-schnell weights are apache-2.0 but Cloudflare's service terms are separate -- verify both.",
+      "trains_on_inputs": null
+    },
+    "gemini": {
+      "enabled": false,
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+      "auth": "api_key",
+      "api_shape": "gemini_generate_content",
+      "model": "gemini-2.5-flash-image",
+      "keys": [
+        "GEMINI_API_KEY"
+      ],
+      "daily_quota": 0,
+      "per_minute_quota": 0,
+      "max_resolution": "1024x1024",
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Image generation is quota 0 on the free tier and the API offers no 5:6 aspect ratio (nearest 4:5 is 4% off and fails image QA), so this needs billing AND a pad-to-5:6 step before the licence question even matters. build_request refuses this api_shape outright for that reason -- enabling it here will not produce an image.",
+      "trains_on_inputs": null
+    },
+    "together": {
+      "enabled": false,
+      "endpoint": "",
+      "auth": "bearer",
+      "api_shape": "openai_images",
+      "model": "",
+      "keys": [],
+      "daily_quota": null,
+      "per_minute_quota": null,
+      "max_resolution": null,
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Unverified. Direct Together API, not the HF router.",
+      "trains_on_inputs": null
+    },
+    "huggingface": {
+      "enabled": false,
+      "endpoint": "https://router.huggingface.co/hf-inference/models/{model}",
+      "auth": "bearer",
+      "api_shape": "hf_text_to_image",
+      "model": "stabilityai/stable-diffusion-3-medium-diffusers",
+      "keys": [
+        "HUGGINGFACE_API_KEY"
+      ],
+      "daily_quota": 1000,
+      "per_minute_quota": 60,
+      "max_resolution": "1024x1024",
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. stabilityai/stable-diffusion-3-medium-diffusers is license 'other' (Stability Community Licence -- revenue-capped, conditional) and gated on the Hub. Weaker terms than the apache-2.0 routes above, and the output is compressed JPEG.",
+      "trains_on_inputs": false
+    }
+  }
+}

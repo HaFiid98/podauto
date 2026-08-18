@@ -1,0 +1,250 @@
+{
+  "_meta": {
+    "version": 1,
+    "note": "Scaffold -- 12 evergreen POD styles. Edit freely. Three rules matter: (1) text_strategy is 'model_rendered' -- the model draws the lettering itself, so each style carries a 'lettering' fragment describing how that text should look. (2) No Midjourney '--no' syntax anywhere; Flux/SDXL endpoints ignore it or read it as positive prompt text, meaning a '--no mockup' suffix plausibly ASKS for a mockup. (3) palette_hint, graphic and lettering are SCANNED for colour words to pick the chroma ground the print stage keys out -- see prompts.ground_for_style. Adding 'magenta' to a palette moves that style off the magenta ground automatically; a style that names magenta, green, cyan AND yellow leaves nothing safe to key, and printready will report the collision.",
+    "ground_note": "You do not set the background colour here. prompts.output_suffix appends it, chosen per style to avoid that style's own palette, and printready.remove_ground keys it out on the way to the 4500x5400 transparent PNG. Do not write background instructions into 'graphic' -- two ground instructions in one prompt is how you get a full-bleed rectangle no removal can save. MEASURED 2026-08-17: the models do not comply. 3 of 3 real generations on the Hugging Face routes painted their own ground instead of the requested one (#FF00FF -> #D53536, #00FF00 -> #000000, #FF00FF -> #F40034), and the black one then collided with its own outlines at 4.5% of the art. All three files were still usable because printready keys the border colour it actually finds, not the one asked for. Treat ground_hint as a diagnostic rather than a contract: it exists so an ignored ground is visible instead of silent, and review.py reports that warning without blocking an approval on it. The rule above still holds -- do not write background instructions into 'graphic' -- because two ground instructions make the detected border unpredictable, which is the one thing removal actually depends on.",
+    "text_rendering_caveat": "Image models draw letterforms, they do not typeset. Spelling is not guaranteed and there is no verification stage configured. Misspelled or malformed lettering will reach the manual review queue. The 'lettering' fragment biases toward short, simple text because short text fails less often.",
+    "text_layout_fields": {
+      "arrangement": "stacked | arc_over | arc_under | banner | none",
+      "case": "upper | title | lower",
+      "font_role": "display | script | slab | sans | serif -- describes the LOOK requested of the model, not a font file",
+      "position": "above | below | center_overlay | split"
+    }
+  },
+  "styles": [
+    {
+      "id": "retro_70s_sunset",
+      "name": "Vintage 70s Retro Sunset",
+      "graphic": "vintage 1970s retro sunset with horizontal stripe bands in burnt orange, mustard yellow and cream, simple silhouetted subject in the foreground, distressed grain texture, flat screen-print separation, limited 4-colour palette",
+      "lettering": "bold retro serif lettering with slight arch, warm cream fill, subtle distress on the letterforms",
+      "text_layout": {
+        "arrangement": "arc_over",
+        "case": "upper",
+        "font_role": "display",
+        "position": "above"
+      },
+      "palette_hint": "burnt orange, mustard, cream, deep brown",
+      "good_for": [
+        "outdoors",
+        "hobby",
+        "dad",
+        "nostalgia"
+      ]
+    },
+    {
+      "id": "minimal_line_art",
+      "name": "Minimalist Line Art",
+      "graphic": "single-weight continuous line drawing, minimal abstract subject, generous negative space, one flat ink colour, no shading, no gradients, clean geometric simplicity",
+      "lettering": "thin lowercase sans-serif lettering, generous letter spacing, single ink colour matching the line work",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "lower",
+        "font_role": "sans",
+        "position": "below"
+      },
+      "palette_hint": "single ink colour",
+      "good_for": [
+        "aesthetic",
+        "wellness",
+        "plant",
+        "minimalist"
+      ]
+    },
+    {
+      "id": "y2k_cyber_vector",
+      "name": "Y2K Cyberpunk Vector",
+      "graphic": "Y2K aesthetic vector graphic, chrome and holographic gradients, sharp angular shapes, starburst and sparkle accents, electric blue and magenta on black, early-2000s digital poster energy",
+      "lettering": "chrome-effect bold italic lettering with sharp bevels and a glossy highlight, tight spacing",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "upper",
+        "font_role": "display",
+        "position": "center_overlay"
+      },
+      "palette_hint": "chrome, electric blue, magenta, black",
+      "good_for": [
+        "meme",
+        "gen z",
+        "music",
+        "gaming"
+      ]
+    },
+    {
+      "id": "distressed_collegiate",
+      "name": "Distressed Collegiate Athletic",
+      "graphic": "distressed vintage athletic department crest, heavy grain and crackle texture, two-tone block colour, simple emblem or mascot silhouette, worn 1980s varsity print feel",
+      "lettering": "heavy slab varsity block lettering, all caps, thick outline, heavy distress and crackle across the letterforms",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "upper",
+        "font_role": "slab",
+        "position": "split"
+      },
+      "palette_hint": "navy and cream, or maroon and gold",
+      "good_for": [
+        "sports",
+        "hobby",
+        "school",
+        "team"
+      ],
+      "caution": "Collegiate lockups read as licensed merchandise. Never pair with a real school, city team, or 'Property of' construction -- see triage tier 3."
+    },
+    {
+      "id": "kawaii_pastel",
+      "name": "Kawaii Pastel Cute",
+      "graphic": "kawaii chibi character illustration, soft pastel palette, thick rounded outlines, simple dot-and-arc face, flat cel shading, sticker-like clean edges",
+      "lettering": "rounded bubble lettering with a soft outline, pastel fill, playful slight bounce on the baseline",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "title",
+        "font_role": "script",
+        "position": "below"
+      },
+      "palette_hint": "pastel pink, mint, lilac, cream",
+      "good_for": [
+        "cat",
+        "animal",
+        "kids",
+        "cute",
+        "food"
+      ]
+    },
+    {
+      "id": "bold_typographic",
+      "name": "Bold Typographic Statement",
+      "graphic": "simple bold geometric shape block or underline flourish as a backdrop element only, heavy solid fill, no illustration, designed to sit behind large lettering",
+      "lettering": "very large heavy condensed sans-serif lettering, all caps, tightly stacked lines, single solid colour, dominates the composition",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "upper",
+        "font_role": "display",
+        "position": "center_overlay"
+      },
+      "palette_hint": "single bold ink colour",
+      "good_for": [
+        "funny",
+        "statement",
+        "attitude",
+        "quote"
+      ]
+    },
+    {
+      "id": "woodcut_engraving",
+      "name": "Vintage Woodcut Engraving",
+      "graphic": "antique woodcut engraving illustration, fine cross-hatched linework, high contrast single-colour ink, 19th century natural history plate aesthetic, detailed and symmetrical",
+      "lettering": "classical engraved serif lettering with fine hairlines, all caps, set on a ribbon banner",
+      "text_layout": {
+        "arrangement": "banner",
+        "case": "upper",
+        "font_role": "serif",
+        "position": "below"
+      },
+      "palette_hint": "single black or sepia ink",
+      "good_for": [
+        "outdoors",
+        "nautical",
+        "coffee",
+        "craft",
+        "occult"
+      ]
+    },
+    {
+      "id": "groovy_hippie",
+      "name": "Groovy Retro Wavy",
+      "graphic": "1970s groovy psychedelic composition, wavy flowing organic shapes, smiling sun or flower motifs, warm retro palette, flat vector with bold outlines",
+      "lettering": "groovy rounded retro lettering with wavy baseline and thick soft strokes, warm palette",
+      "text_layout": {
+        "arrangement": "arc_over",
+        "case": "upper",
+        "font_role": "display",
+        "position": "above"
+      },
+      "palette_hint": "avocado green, terracotta, warm yellow",
+      "good_for": [
+        "positivity",
+        "wellness",
+        "music",
+        "summer"
+      ]
+    },
+    {
+      "id": "grunge_punk",
+      "name": "Grunge Punk Collage",
+      "graphic": "punk zine collage aesthetic, torn paper edges, photocopied halftone texture, spray stencil marks, high contrast black and one accent colour, deliberately rough composition",
+      "lettering": "ransom-note cut-paper lettering with mismatched letterforms, high contrast, rough photocopied edges",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "upper",
+        "font_role": "display",
+        "position": "center_overlay"
+      },
+      "palette_hint": "black, bone white, one hot accent",
+      "good_for": [
+        "music",
+        "attitude",
+        "skate",
+        "anti-establishment"
+      ]
+    },
+    {
+      "id": "cottagecore_botanical",
+      "name": "Cottagecore Botanical",
+      "graphic": "delicate hand-drawn botanical arrangement, wildflowers and foliage wreath, muted earthy watercolour tones, soft irregular linework, cottage garden feel",
+      "lettering": "elegant flowing script lettering with fine connecting strokes, muted earthy ink, gentle curve",
+      "text_layout": {
+        "arrangement": "arc_under",
+        "case": "title",
+        "font_role": "script",
+        "position": "center_overlay"
+      },
+      "palette_hint": "sage, dusty rose, wheat, soft terracotta",
+      "good_for": [
+        "garden",
+        "plant",
+        "farmhouse",
+        "mom",
+        "tea"
+      ]
+    },
+    {
+      "id": "flat_mascot",
+      "name": "Flat Cartoon Mascot",
+      "graphic": "friendly cartoon mascot character, thick uniform outline, flat fill colours, simple expressive face, dynamic pose, modern sticker illustration style",
+      "lettering": "chunky rounded cartoon lettering with a thick contrasting outline, slight arch, bright flat fill",
+      "text_layout": {
+        "arrangement": "banner",
+        "case": "upper",
+        "font_role": "display",
+        "position": "below"
+      },
+      "palette_hint": "bright primary colours",
+      "good_for": [
+        "hobby",
+        "job",
+        "animal",
+        "funny",
+        "kids"
+      ]
+    },
+    {
+      "id": "blueprint_technical",
+      "name": "Technical Blueprint Schematic",
+      "graphic": "technical blueprint schematic diagram, precise white line drawing, exploded-view construction, measurement ticks and callout leader lines, drafting aesthetic",
+      "lettering": "precise technical drafting lettering, all caps, uniform monospaced stroke weight, thin underline rule",
+      "text_layout": {
+        "arrangement": "stacked",
+        "case": "upper",
+        "font_role": "sans",
+        "position": "below"
+      },
+      "palette_hint": "blueprint blue and white",
+      "good_for": [
+        "engineer",
+        "hobby",
+        "aviation",
+        "car",
+        "science"
+      ]
+    }
+  ]
+}

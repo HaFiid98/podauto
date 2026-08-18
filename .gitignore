@@ -1,0 +1,24 @@
+# Secrets. providers.json holds only env var NAMES; the values live here.
+.env
+*.env
+!config/*.example.json
+
+# Operator-local provider config. config/providers.example.json is the
+# committable template; this copy carries your enabled flags and licence
+# determinations.
+config/providers.json
+
+# Runtime state
+data/*.jsonl
+data/*_ledger.json
+data/smoke*
+
+# Generated artwork. Regenerable from the store and the prompts, and each file is
+# hundreds of KB -- there is no version of this worth keeping in a repo.
+data/images/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

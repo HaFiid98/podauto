@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "version": 1,
+    "last_reviewed": "2026-08-10",
+    "note": "SCAFFOLD. Amazon's restricted-content rules change and are not fully enumerated publicly -- verify against the current Merch on Demand content policy and tune. Unlike the trademark denylist, this one CAN be a hard gate: it checks our own generated text against published rules, so a PASS is a claim that holds. It is still only as good as these lists.",
+    "difference_from_denylist": "Trademark asks whether we infringe someone else's rights (not determinable from a word list). Content policy asks whether our own text breaks a published rule (determinable)."
+  },
+
+  "prohibited_categories": {
+    "profanity": ["fuck", "fucking", "shit", "bitch", "asshole", "cunt", "bastard", "dickhead", "motherfucker", "wtf", "stfu"],
+    "sexual": ["porn", "nude", "nudes", "xxx", "blowjob", "handjob", "orgasm", "horny", "milf", "onlyfans", "escort service", "sex toy", "dildo", "strip club"],
+    "drugs": ["cocaine", "heroin", "meth", "methamphetamine", "crack pipe", "bong", "blunt wrap", "weed", "marijuana", "cannabis", "420 friendly", "magic mushrooms", "lsd", "ecstasy", "mdma", "fentanyl", "opioid"],
+    "weapons": ["ar 15", "ak 47", "glock", "silencer", "suppressor", "ghost gun", "assault rifle", "machine gun", "grenade", "pipe bomb", "ammo box"],
+    "alcohol_tobacco": ["vape", "vaping", "juul", "e cigarette", "chewing tobacco", "moonshine still"],
+    "hate_and_discrimination": ["nazi", "swastika", "white power", "heil", "kkk", "ku klux", "racial purity", "gas chamber", "lynching", "ethnic cleansing"],
+    "violence": ["kill yourself", "kys", "murder spree", "school shooting", "mass shooting", "suicide bomber", "beheading", "torture porn"],
+    "medical_claims": ["cures cancer", "cures covid", "prevents disease", "fda approved", "clinically proven", "guaranteed cure", "miracle cure", "treats depression", "reverses diabetes"],
+    "political": ["trump 2024", "trump 2028", "biden 2024", "maga", "vote democrat", "vote republican", "stop the steal", "defund the police", "make america great again"],
+    "self_harm": ["self harm", "cutting myself", "suicide hotline shirt", "pro ana", "thinspo"]
+  },
+
+  "listing_field_rules": {
+    "forbidden_phrases": {
+      "note": "Amazon rejects these in listing copy. Print/material/shipping claims are Amazon's to make, not the seller's.",
+      "terms": [
+        "soft cotton", "cotton blend", "premium quality", "high quality print",
+        "best quality", "durable print", "fade resistant", "machine washable",
+        "fast shipping", "free shipping", "ships fast", "quick delivery",
+        "size chart", "true to size", "runs small", "runs large",
+        "sweatshirt", "hoodie", "tank top", "long sleeve",
+        "money back", "satisfaction guaranteed", "best seller", "top rated",
+        "on sale", "discount", "cheap", "limited time offer", "buy now",
+        "click here", "visit our store", "check out our other"
+      ]
+    },
+    "price_pattern": "\\$\\s*\\d|\\b\\d+\\s*(?:usd|dollars?|percent|% off)\\b",
+    "contact_pattern": "\\b[\\w.+-]+@[\\w-]+\\.[\\w.]+\\b|\\bwww\\.|https?://|\\b\\d{3}[.-]\\d{3}[.-]\\d{4}\\b",
+    "html_pattern": "</?[a-z][^>]*>|&[a-z]+;",
+    "max_consecutive_caps_words": 2,
+    "allow_emoji": false
+  }
+}
