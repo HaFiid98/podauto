@@ -45,13 +45,37 @@ def test_all_twelve_styles_load(db):
 
 
 def test_every_style_has_a_lettering_fragment(db):
-    """Model renders the text now, so each style must describe how it looks."""
+    """Every style must describe how its text looks -- including the composited
+    ones, which keep the fragment but leave it out of the prompt. That is what
+    makes switching a style back to model_rendered one key rather than a rewrite."""
     missing = [s["id"] for s in db.styles.values() if not s.get("lettering")]
     assert missing == []
 
 
-def test_meta_declares_model_rendered_strategy(db):
-    assert "model_rendered" in db.meta["note"]
+def test_meta_declares_both_text_strategies_and_which_is_the_default(db):
+    """The strategy is per style now, so the file has to say what the key does and
+    what happens when it is absent -- otherwise the default is a code detail."""
+    note = db.meta["note"]
+    assert "model_rendered" in note and "composited" in note
+    assert "PER STYLE" in note
+    assert "Default (key absent) is \'model_rendered\'" in note
+
+
+def test_every_composited_style_is_one_the_compositor_can_actually_draw(db):
+    """The config-versus-code seam, and the one that fails silently: a style marked
+    composited gets a prompt with no text in it, so if printready then cannot draw
+    the type the shirt has no lettering at all. Arrangement and font are both
+    checked here rather than being discovered on a real generation."""
+    from podauto.lettering import FONTS, ROLE_FACE, SUPPORTED_ARRANGEMENTS
+
+    composited = {sid: s["text_layout"] for sid, s in db.styles.items()
+                  if s.get("text_layout", {}).get("text_strategy") == "composited"}
+    assert composited, "no style opted in -- this test would pass vacuously"
+    for sid, layout in composited.items():
+        assert layout["arrangement"] in SUPPORTED_ARRANGEMENTS, sid
+        key = layout.get("font") or ROLE_FACE.get(layout.get("font_role", ""))
+        assert key in FONTS, f"{sid}: no font for {layout.get('font_role')!r}"
+        assert FONTS[key].path.is_file(), f"{sid}: {FONTS[key].path} is not on disk"
 
 
 def test_meta_carries_the_spelling_caveat(db):
@@ -142,9 +166,41 @@ def test_prompt_excludes_garment_and_mockup(db):
 # --- text handling ------------------------------------------------------
 
 def test_text_is_quoted_and_stated_exactly(db):
-    prompt = build_prompt(db.get("bold_typographic"), make(), derive_text(make()))
+    """A model_rendered style: quoting the string and stating it plainly is the one
+    prompt-level lever that helps accuracy. grunge_punk rather than
+    bold_typographic because bold_typographic composites its lettering now, and a
+    composited prompt is asserted not to contain this at all (below)."""
+    prompt = build_prompt(db.get("grunge_punk"), make(), derive_text(make()))
     assert '"PICKLEBALL DAD RETRO SUNSET"' in prompt
     assert "spelled exactly as written" in prompt
+
+
+def test_a_composited_prompt_asks_for_no_text_at_all(db):
+    """The way this change fails invisibly: leave the text request in and the model
+    draws its own words, printready typesets the real ones on top, and the shirt
+    carries two sets of lettering. Asserted through synthesize, because the
+    strategy comes from the style config and not from the caller."""
+    # trend_idea, because select_styles prepends an aesthetic match for
+    # ready_shirt records and that match ignores the selected pool.
+    rec = synthesize(make(idea_type=IdeaType.TREND_IDEA), db, 1, ["bold_typographic"])
+    prompt = rec.variations[0].graphic_prompt
+
+    assert "PICKLEBALL DAD RETRO SUNSET" not in prompt
+    assert "spelled exactly as written" not in prompt
+    assert "no text, no letters, no words" in prompt
+    # The style's lettering fragment describes the letterforms, so it is a text
+    # request by another name.
+    assert db.get("bold_typographic")["lettering"] not in prompt
+
+
+def test_a_model_rendered_prompt_still_carries_its_text_and_lettering(db):
+    """The other half: the 8 styles that did not opt in must be untouched."""
+    rec = synthesize(make(idea_type=IdeaType.TREND_IDEA), db, 1, ["grunge_punk"])
+    prompt = rec.variations[0].graphic_prompt
+
+    assert '"PICKLEBALL DAD RETRO SUNSET"' in prompt
+    assert db.get("grunge_punk")["lettering"] in prompt
+    assert "no text, no letters" not in prompt
 
 
 def test_long_text_is_truncated_and_flagged():
@@ -158,24 +214,46 @@ def test_short_text_is_not_flagged():
     assert derive_text(make(text="Pickleball Dad")).truncated is False
 
 
-def test_case_follows_the_style(db):
+def test_case_follows_the_style_in_a_model_rendered_prompt(db):
     r = make()
-    # minimal_line_art is configured lowercase, distressed_collegiate uppercase
-    lower = build_prompt(db.get("minimal_line_art"), r, derive_text(r))
+    # cottagecore_botanical is configured title case, distressed_collegiate upper
+    title = build_prompt(db.get("cottagecore_botanical"), r, derive_text(r))
     upper = build_prompt(db.get("distressed_collegiate"), r, derive_text(r))
-    assert '"pickleball dad retro sunset"' in lower
+    assert '"Pickleball Dad Retro Sunset"' in title
     assert '"PICKLEBALL DAD RETRO SUNSET"' in upper
+
+
+def test_case_follows_the_style_for_composited_text_too(db):
+    """minimal_line_art is the only lowercase style and it composites now, so the
+    case can no longer be read out of the prompt string. It travels in text_spec
+    instead, which is what lettering.plan_from applies."""
+    rec = synthesize(make(idea_type=IdeaType.TREND_IDEA), db, 2,
+                     ["minimal_line_art", "blueprint_technical"])
+    assert rec.variations[0].text_spec["case"] == "lower"
+    assert rec.variations[1].text_spec["case"] == "upper"
 
 
 # --- reversibility ------------------------------------------------------
 
-def test_text_spec_is_populated_even_though_nothing_reads_it(db):
-    """The hook that makes switching strategies a config change, not a migration."""
-    r = synthesize(make(), db, configured_variations=2)
+def test_text_spec_is_populated_even_where_nothing_reads_it(db):
+    """The hook that made switching strategies a config change, not a migration:
+    line_1 was always written, including for the styles where the model draws the
+    text and no code reads the field back."""
+    r = synthesize(make(idea_type=IdeaType.TREND_IDEA), db, 1, ["grunge_punk"])
     spec = r.variations[0].text_spec
     assert spec["line_1"] == "Pickleball Dad Retro Sunset"
     assert spec["strategy"] == "model_rendered"
     assert spec["arrangement"] and spec["case"] and spec["position"]
+
+
+def test_a_composited_variation_records_the_strategy_that_will_be_read(db):
+    """Same field, now load-bearing -- printready reads exactly these keys, and
+    text_spec is a plain dict so the extra value needed no migration."""
+    r = synthesize(make(idea_type=IdeaType.TREND_IDEA), db, 1, ["minimal_line_art"])
+    spec = r.variations[0].text_spec
+    assert spec["strategy"] == "composited"
+    assert spec["line_1"] == "Pickleball Dad Retro Sunset"
+    assert spec["arrangement"] == "stacked" and spec["position"] == "below"
 
 
 # --- variation selection ------------------------------------------------

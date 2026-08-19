@@ -18,9 +18,11 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from podauto.imageqa import check_print_ready
+from podauto import lettering
+from podauto.imageqa import TARGET_H, TARGET_W, check_print_ready
 from podauto.models import PipelineStatus, Record, StyleVariation
 from podauto.printready import (
+    OVERLAY_LEGIBILITY_PHRASE,
     ALPHA_FLOOR,
     as_rgb,
     border_colour,
@@ -339,3 +341,243 @@ def test_print_qa_reads_the_print_file_not_the_generated_one(tmp_path):
     assert report is not None
     assert report.path == var.print_path
     assert report.ok, report.failures
+
+
+# --- composited lettering ------------------------------------------------
+#
+# The band is the whole contract between the typesetter and the artwork: the art
+# is upscaled to size[1] - band and seated at the end the text is not on, so the
+# two can never overlap. Asserted byte-exactly below, because "they look like they
+# do not overlap" is not a property a 250px canvas can show.
+
+COMPOSITED_STYLE = {
+    "id": "s0", "name": "Style 0", "graphic": "g", "lettering": "clean sans type",
+    "text_layout": {"arrangement": "stacked", "case": "upper",
+                    "font_role": "display", "position": "below",
+                    "text_strategy": "composited"},
+}
+
+
+def composited_spec(**kw) -> dict:
+    return {"line_1": "Pickleball Dad", "arrangement": "stacked", "case": "upper",
+            "position": "below", "truncated": False, "strategy": "composited", **kw}
+
+
+def a_plan(position="below", size=TEST_SIZE):
+    layout = dict(COMPOSITED_STYLE["text_layout"], position=position)
+    style = dict(COMPOSITED_STYLE, text_layout=layout)
+    plan = lettering.plan_from(composited_spec(position=position), style, size)
+    assert plan is not None and plan.ok, plan.failures
+    return plan
+
+
+def print_with(tmp_path, clean_png, plan=None, size=TEST_SIZE, name="p.png"):
+    out = tmp_path / name
+    result = make_print_ready(clean_png, out, requested_ground="#FF00FF",
+                              method="raster", size=size, lettering=plan)
+    assert result.ok, result.failures
+    return Image.open(out), result
+
+
+def test_passing_no_plan_changes_nothing_about_the_file(tmp_path, clean_png):
+    """The default path, and 8 of 12 styles stay on it. The lettering parameter
+    defaults to None so every existing caller -- tests, verify.sh stage 7, any
+    record synthesized before this existed -- produces the same bytes as before."""
+    plain, result = print_with(tmp_path, clean_png, name="plain.png")
+    assert not [k for k in result.facts if "lettering" in k], result.facts
+    assert plain.getchannel("A").getbbox() == (44, 54, 208, 248)
+
+
+def test_a_lettered_file_still_passes_the_print_gate_at_the_real_size(tmp_path,
+                                                                      clean_png):
+    """One full-size pass with type on it, for the same reason the plain one above
+    exists -- and because the gate is what this could break. Type reaching the
+    canvas border fails edge_opaque outright, and the margins that keep it clear
+    are fractions of 4500x5400, so a 250px canvas cannot exercise them."""
+    full = (TARGET_W, TARGET_H)
+    _, result = print_with(tmp_path, clean_png, a_plan(size=full),
+                           name="real.png", size=full)
+
+    report = check_print_ready(tmp_path / "real.png")
+    assert report.ok, report.failures
+    assert report.facts["edge_opaque"] == 0.0
+    assert result.facts["lettering_band"] > 0
+
+
+def test_the_band_is_reserved_and_the_artwork_never_enters_it(tmp_path, clean_png):
+    """Byte-exact: the region above a `below` band must be the same image as the
+    art rendered onto a canvas that short. Any art pixel inside the band, or any
+    glyph above it, breaks the comparison."""
+    plan = a_plan("below")
+    band = plan.band_height(TEST_SIZE)
+    lettered, _ = print_with(tmp_path, clean_png, plan, name="below.png")
+    short, _ = print_with(tmp_path, clean_png, name="short.png",
+                          size=(TEST_SIZE[0], TEST_SIZE[1] - band))
+
+    art_region = lettered.crop((0, 0, TEST_SIZE[0], TEST_SIZE[1] - band))
+    assert art_region.tobytes() == short.tobytes(), "art and type are not disjoint"
+    band_region = lettered.crop((0, TEST_SIZE[1] - band, *TEST_SIZE))
+    assert band_region.getchannel("A").getbbox() is not None, "the band is empty"
+
+
+def test_position_above_seats_the_art_below_its_band(tmp_path, clean_png):
+    """Same contract, mirrored -- and worth its own case because this is where the
+    seating offset is applied rather than skipped."""
+    plan = a_plan("above")
+    band = plan.band_height(TEST_SIZE)
+    lettered, _ = print_with(tmp_path, clean_png, plan, name="above.png")
+    short, _ = print_with(tmp_path, clean_png, name="short2.png",
+                          size=(TEST_SIZE[0], TEST_SIZE[1] - band))
+
+    assert lettered.crop((0, band, *TEST_SIZE)).tobytes() == short.tobytes()
+    assert lettered.crop((0, 0, TEST_SIZE[0], band)).getchannel("A").getbbox()
+
+
+def test_center_overlay_reserves_nothing_and_leaves_the_art_full_height(
+        tmp_path, clean_png):
+    """These position values already meant this, so the compositor follows them
+    instead of inventing a third rule: an overlay lands on top of whatever the
+    model painted, at the price of legibility the reviewer has to judge."""
+    plain, _ = print_with(tmp_path, clean_png, name="plain2.png")
+    lettered, result = print_with(tmp_path, clean_png, a_plan("center_overlay"),
+                                 name="overlay.png")
+
+    assert result.facts["lettering_band"] == 0
+    top, bottom = plain.getchannel("A").getbbox()[1::2]
+    assert lettered.getchannel("A").getbbox()[1::2] == (top, bottom), \
+        "the art was scaled down for a band that should not exist"
+
+
+def test_an_overlaid_design_tells_the_reviewer_to_check_it_reads(tmp_path,
+                                                                clean_png):
+    """Measured on the first real composited run: Anton over a busy dark
+    illustration, spelled perfectly and completely unreadable. Nothing measures
+    legibility, and the type and the artwork were produced independently, so the
+    only place this can be caught is the review queue -- which means it has to be
+    said there."""
+    _, result = print_with(tmp_path, clean_png, a_plan("center_overlay"),
+                          name="legible.png")
+    overlay = [w for w in result.warnings if OVERLAY_LEGIBILITY_PHRASE in w]
+    assert len(overlay) == 1, result.warnings
+    assert "spelled correctly by construction" in overlay[0]
+
+
+def test_a_banded_design_says_nothing_about_legibility(tmp_path, clean_png):
+    """The band exists precisely so the two do not overlap, so the concern does not
+    apply -- and a note that fired on every design would stop being read."""
+    _, result = print_with(tmp_path, clean_png, a_plan("below"), name="banded.png")
+    assert not [w for w in result.warnings if OVERLAY_LEGIBILITY_PHRASE in w]
+
+
+def test_the_legibility_note_is_classified_so_it_does_not_gate_every_overlay(
+        tmp_path, clean_png):
+    """The allowlist blocks anything unclassified, which is the right default -- but
+    this note fires on every center_overlay design, and a --force typed every time
+    carries no information. The seam is asserted here rather than trusted: the
+    warning and the constant review.py matches on live in different statements."""
+    from podauto.review import split_notes
+
+    rec = a_record(tmp_path)
+    rec.variations[0].text_spec = composited_spec(position="center_overlay")
+    layout = dict(COMPOSITED_STYLE["text_layout"], position="center_overlay")
+    printready_record(rec, method="raster", size=TEST_SIZE,
+                      styles={"s0": dict(COMPOSITED_STYLE, text_layout=layout)})
+
+    blocking, informational = split_notes(rec.variations[0])
+    assert any(OVERLAY_LEGIBILITY_PHRASE in n for n in informational)
+    assert not [n for n in blocking if OVERLAY_LEGIBILITY_PHRASE in n]
+
+
+def test_the_same_source_and_plan_produce_the_same_file_twice(tmp_path, clean_png):
+    """printready is re-runnable with --force. A file that differed run to run
+    would not be the file a reviewer approved."""
+    first, _ = print_with(tmp_path, clean_png, a_plan(), name="one.png")
+    second, _ = print_with(tmp_path, clean_png, a_plan(), name="two.png")
+    assert first.tobytes() == second.tobytes()
+
+
+def test_the_facts_carry_the_font_and_band_to_the_review_queue(tmp_path, clean_png):
+    _, result = print_with(tmp_path, clean_png, a_plan())
+    assert "font=Anton" in result.facts["lettering"]
+    assert "point_size=" in result.facts["lettering"]
+    assert result.facts["lettering_ink_source"] == "sampled from the artwork"
+    assert "font_licence" not in result.facts["lettering"], \
+        "the licence path belongs in the plan, not in every reviewer's queue line"
+
+
+def test_a_style_ink_override_beats_sampling_and_is_reported_as_such(tmp_path,
+                                                                     clean_png):
+    layout = dict(COMPOSITED_STYLE["text_layout"], ink="#FF3366")
+    style = dict(COMPOSITED_STYLE, text_layout=layout)
+    plan = lettering.plan_from(composited_spec(), style, TEST_SIZE)
+    lettered, result = print_with(tmp_path, clean_png, plan, name="ink.png")
+
+    assert result.facts["lettering_ink_source"] == "style override"
+    colours = {c for _, c in lettered.getcolors(maxcolors=1 << 20) or []}
+    assert (0xFF, 0x33, 0x66, 255) in colours
+
+
+def test_a_plan_that_cannot_be_drawn_still_writes_a_file_and_warns(tmp_path,
+                                                                   clean_png):
+    """Throwing away usable artwork over a config mistake would be the wrong
+    trade. The file is written, the reason is recorded, and because review.py's
+    allowlist blocks anything it has not classified, the note holds the approval
+    until a human reads it -- which is the point, since the prompt already told
+    the model not to draw text."""
+    layout = dict(COMPOSITED_STYLE["text_layout"], arrangement="banner")
+    style = dict(COMPOSITED_STYLE, text_layout=layout)
+    plan = lettering.plan_from(composited_spec(arrangement="banner"), style, TEST_SIZE)
+    assert plan is not None and not plan.ok
+
+    out = tmp_path / "failed.png"
+    result = make_print_ready(clean_png, out, requested_ground="#FF00FF",
+                              method="raster", size=TEST_SIZE, lettering=plan)
+    assert result.ok and out.is_file()
+    assert any("banner" in w for w in result.warnings)
+    assert "lettering_band" not in result.facts
+    assert result.facts["lettering"] == "not drawn"
+
+
+# --- record level, with the style database -------------------------------
+
+def test_a_composited_style_is_typeset_when_printready_is_given_the_styles(tmp_path):
+    """The wiring `cmd_printready` depends on. Without the styles argument there is
+    no strategy to read and the design silently comes out blank where the words
+    belong -- the prompt has already asked the model not to draw them."""
+    rec = a_record(tmp_path)
+    rec.variations[0].text_spec = composited_spec()
+    printready_record(rec, method="raster", size=TEST_SIZE,
+                      styles={"s0": COMPOSITED_STYLE})
+
+    var = rec.variations[0]
+    assert var.print_path and Path(var.print_path).is_file()
+    band = lettering.band_for("below", 1, TEST_SIZE)
+    assert Image.open(var.print_path).crop(
+        (0, TEST_SIZE[1] - band, *TEST_SIZE)).getchannel("A").getbbox()
+
+
+def test_a_record_printed_without_styles_is_never_typeset(tmp_path):
+    """printready_record is called from places that have no style database, and
+    from records synthesized before text_strategy existed. Both must keep today's
+    behaviour rather than half-applying a plan."""
+    rec = a_record(tmp_path)
+    rec.variations[0].text_spec = composited_spec()
+    printready_record(rec, method="raster", size=TEST_SIZE)
+    assert not any("lettering" in n for n in rec.variations[0].qa_notes)
+
+
+def test_a_model_rendered_variation_is_untouched_by_the_style_database(tmp_path):
+    rec = a_record(tmp_path)
+    rec.variations[0].text_spec = composited_spec(strategy="model_rendered")
+    printready_record(rec, method="raster", size=TEST_SIZE,
+                      styles={"s0": COMPOSITED_STYLE})
+    assert not any("lettering" in n for n in rec.variations[0].qa_notes)
+
+
+def test_a_lettering_failure_reaches_the_reviewer_through_qa_notes(tmp_path):
+    layout = dict(COMPOSITED_STYLE["text_layout"], font="helvetica-neue")
+    rec = a_record(tmp_path)
+    rec.variations[0].text_spec = composited_spec()
+    printready_record(rec, method="raster", size=TEST_SIZE,
+                      styles={"s0": dict(COMPOSITED_STYLE, text_layout=layout)})
+    assert any("helvetica-neue" in n for n in rec.variations[0].qa_notes)

@@ -252,16 +252,26 @@ def qa_variation(variation: StyleVariation, stage: str = "generated") -> QaRepor
     The file is left on disk when it fails. Deleting it would remove the only
     evidence the operator has for deciding whether the prompt, the provider or
     the removal step is at fault.
+
+    Notes are recorded only once, the way printready.printready_variation does it.
+    The command is re-runnable and gets re-run -- typically straight after a
+    `printready --force` -- and without this an unchanged failure appears once per
+    run. Observed 2026-08-18: two runs, and the border-opacity note was listed
+    twice on the same design. The review queue is the pipeline's only safety
+    property, so a list that pads itself is a real cost: it buries the notes that
+    differ under repeats of the one that does not.
     """
     print_ready = stage == "print_ready"
     path = variation.print_path if print_ready else variation.image_path
     if not path:
         return None
     report = (check_print_ready if print_ready else check_generated)(path)
-    for failure in report.failures:
-        variation.qa_notes.append(f"image qa ({stage}): {failure}")
-    for warning in report.warnings:
-        variation.qa_notes.append(f"image qa ({stage}) warning: {warning}")
+    for prefix, items in ((f"image qa ({stage}): ", report.failures),
+                          (f"image qa ({stage}) warning: ", report.warnings)):
+        for item in items:
+            note = prefix + item
+            if note not in variation.qa_notes:
+                variation.qa_notes.append(note)
     return report
 
 

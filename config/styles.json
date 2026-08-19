@@ -1,14 +1,17 @@
 {
   "_meta": {
     "version": 1,
-    "note": "Scaffold -- 12 evergreen POD styles. Edit freely. Three rules matter: (1) text_strategy is 'model_rendered' -- the model draws the lettering itself, so each style carries a 'lettering' fragment describing how that text should look. (2) No Midjourney '--no' syntax anywhere; Flux/SDXL endpoints ignore it or read it as positive prompt text, meaning a '--no mockup' suffix plausibly ASKS for a mockup. (3) palette_hint, graphic and lettering are SCANNED for colour words to pick the chroma ground the print stage keys out -- see prompts.ground_for_style. Adding 'magenta' to a palette moves that style off the magenta ground automatically; a style that names magenta, green, cyan AND yellow leaves nothing safe to key, and printready will report the collision.",
+    "note": "Scaffold -- 12 evergreen POD styles. Edit freely. Three rules matter: (1) text_layout.text_strategy is PER STYLE. Default (key absent) is 'model_rendered': the model draws the lettering itself, so the style's 'lettering' fragment describes how that text should look. 'composited' means printready typesets text_spec.line_1 with freetype and the prompt asks for artwork only -- spelling becomes exact, and the 'lettering' fragment is kept but left out of the prompt, so switching back is one key. Composited styles also need a supported arrangement (today: stacked only) or printready warns and the design gets no lettering at all. (2) No Midjourney '--no' syntax anywhere; Flux/SDXL endpoints ignore it or read it as positive prompt text, meaning a '--no mockup' suffix plausibly ASKS for a mockup. (3) palette_hint, graphic and lettering are SCANNED for colour words to pick the chroma ground the print stage keys out -- see prompts.ground_for_style. Adding 'magenta' to a palette moves that style off the magenta ground automatically; a style that names magenta, green, cyan AND yellow leaves nothing safe to key, and printready will report the collision.",
     "ground_note": "You do not set the background colour here. prompts.output_suffix appends it, chosen per style to avoid that style's own palette, and printready.remove_ground keys it out on the way to the 4500x5400 transparent PNG. Do not write background instructions into 'graphic' -- two ground instructions in one prompt is how you get a full-bleed rectangle no removal can save. MEASURED 2026-08-17: the models do not comply. 3 of 3 real generations on the Hugging Face routes painted their own ground instead of the requested one (#FF00FF -> #D53536, #00FF00 -> #000000, #FF00FF -> #F40034), and the black one then collided with its own outlines at 4.5% of the art. All three files were still usable because printready keys the border colour it actually finds, not the one asked for. Treat ground_hint as a diagnostic rather than a contract: it exists so an ignored ground is visible instead of silent, and review.py reports that warning without blocking an approval on it. The rule above still holds -- do not write background instructions into 'graphic' -- because two ground instructions make the detected border unpredictable, which is the one thing removal actually depends on.",
-    "text_rendering_caveat": "Image models draw letterforms, they do not typeset. Spelling is not guaranteed and there is no verification stage configured. Misspelled or malformed lettering will reach the manual review queue. The 'lettering' fragment biases toward short, simple text because short text fails less often.",
+    "text_rendering_caveat": "Image models draw letterforms, they do not typeset. Spelling is not guaranteed and there is no verification stage configured. MEASURED across 4 real generations of the same 27-character string: 3 failed on text -- one doubled it, one produced 'RERTICES' for 'RETRO SUNSET', one dropped a letter ('ETRO SUNSET'). Artwork was usable in all 4. So for the styles whose lettering is plain type, text_strategy is 'composited' and printready sets it with freetype instead; MEASURED 2026-08-18, the first 2 composited generations were both exact. The 'lettering' fragment still biases toward short simple text, which is what fits a lockup as well as what the model fails at least. The 8 styles still on 'model_rendered' are the ones whose lettering is a TREATMENT no font reproduces -- chrome bevels, crackle distress, ransom-note cut-paper -- plus the arc and banner arrangements the compositor does not draw yet. Misspelled lettering from those reaches the manual review queue as before. And composited is not verified either, in two distinct ways, both seen on the first run: (a) it guarantees the INTENDED string is spelled right, not that the model drew no letterforms of its own -- one design came back with 'DAD' printed on the figure's shirt despite the prompt's 'no text, no letters, no words'; like the ground instruction that negation is a request. (b) Nothing measures legibility. A center_overlay design set perfect Anton over a busy dark illustration the model drew instead of the flat backdrop block its prompt asked for, and the words vanished into it. printready notes every overlay for that reason. Both stay review-queue matters.",
     "text_layout_fields": {
-      "arrangement": "stacked | arc_over | arc_under | banner | none",
+      "arrangement": "stacked | arc_over | arc_under | banner | none -- composited renders 'stacked' only, the rest are model_rendered for now",
       "case": "upper | title | lower",
-      "font_role": "display | script | slab | sans | serif -- describes the LOOK requested of the model, not a font file",
-      "position": "above | below | center_overlay | split"
+      "font_role": "display | script | slab | sans | serif -- the LOOK requested of the model. For composited styles it also selects the font file, via lettering.ROLE_FACE",
+      "position": "above | below | center_overlay | split -- composited reserves a text band for above/below and scales the art into the rest, so the two can never overlap; center_overlay sets type over the art at full size and is only safe where the graphic prompt genuinely asks for a backdrop the type sits on. Measured once where the model ignored that and drew a full illustration, the overlay was unreadable -- printready flags every overlay so a reviewer checks it. 'split' is not drawn yet.",
+      "text_strategy": "model_rendered (default, key absent) | composited",
+      "font": "optional face key overriding font_role -- see lettering.FONTS",
+      "ink": "optional #RRGGBB for composited type; default samples the artwork"
     }
   },
   "styles": [
@@ -40,7 +43,8 @@
         "arrangement": "stacked",
         "case": "lower",
         "font_role": "sans",
-        "position": "below"
+        "position": "below",
+        "text_strategy": "composited"
       },
       "palette_hint": "single ink colour",
       "good_for": [
@@ -98,7 +102,8 @@
         "arrangement": "stacked",
         "case": "title",
         "font_role": "script",
-        "position": "below"
+        "position": "below",
+        "text_strategy": "composited"
       },
       "palette_hint": "pastel pink, mint, lilac, cream",
       "good_for": [
@@ -118,7 +123,8 @@
         "arrangement": "stacked",
         "case": "upper",
         "font_role": "display",
-        "position": "center_overlay"
+        "position": "center_overlay",
+        "text_strategy": "composited"
       },
       "palette_hint": "single bold ink colour",
       "good_for": [
@@ -235,7 +241,9 @@
         "arrangement": "stacked",
         "case": "upper",
         "font_role": "sans",
-        "position": "below"
+        "position": "below",
+        "text_strategy": "composited",
+        "font": "spacemono"
       },
       "palette_hint": "blueprint blue and white",
       "good_for": [

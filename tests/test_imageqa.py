@@ -312,3 +312,28 @@ def test_warnings_are_recorded_but_do_not_fail_the_record(tmp_path):
 
 
 
+
+
+def test_rerunning_the_gate_does_not_stack_duplicate_notes(tmp_path):
+    """`imageqa` is re-runnable and gets re-run, usually right after a
+    `printready --force`. Observed 2026-08-18 across two runs: the border-opacity
+    note was listed twice on the same design. The review queue is the only place
+    lettering and print damage are ever checked, so a note list that pads itself
+    buries the notes that differ under repeats of the one that does not."""
+    from podauto.imageqa import qa_variation
+    from podauto.models import StyleVariation
+
+    # Deliberately wrong for the print gate: opaque, and not 4500x5400.
+    bad = tmp_path / "bad_print.png"
+    Image.new("RGBA", (100, 120), (10, 10, 10, 255)).save(bad)
+    var = StyleVariation("s0", "S0", "p")
+    var.print_path = str(bad)
+
+    first = qa_variation(var, stage="print_ready")
+    assert first is not None and not first.ok
+    before = list(var.qa_notes)
+    assert before, "the gate recorded nothing"
+
+    for _ in range(3):
+        qa_variation(var, stage="print_ready")
+    assert var.qa_notes == before, var.qa_notes

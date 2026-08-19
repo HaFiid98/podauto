@@ -162,17 +162,21 @@ echo "7. PRINT-READY STAGE"
 echo "=============================================================="
 # Run the real thing at the real deliverable size, on a synthetic generation.
 # The smoke store has no images (every provider is disabled by design), so this
-# supplies its own input rather than depending on quota being spent. Both cases
-# matter: a clean ground must key out to a passing print file, and a ground
-# colour reused inside the artwork must survive removal and be reported -- that
-# collision was measured in 2 of the first 3 real generations.
+# supplies its own input rather than depending on quota being spent. Each case
+# earns its place: a clean ground must key out to a passing print file; a ground
+# colour reused inside the artwork must survive removal and be reported (that
+# collision was measured in 2 of the first 3 real generations); and composited
+# lettering must typeset into a reserved band without touching the artwork or the
+# canvas border. The last one needs no key and no quota -- the fonts are committed
+# -- so it is the only part of the text path a fresh clone can verify offline.
 python - <<'PY' || fail=1
 import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from podauto.imageqa import check_print_ready
+from podauto import lettering
+from podauto.imageqa import TARGET_H, TARGET_W, check_print_ready
 from podauto.printready import make_print_ready
 
 GROUND = (255, 0, 255)
@@ -214,6 +218,52 @@ with tempfile.TemporaryDirectory() as tmp:
                              requested_ground="#00FF00")
     assert any("ignored the ground instruction" in w for w in wrong.warnings), wrong.warnings
     print("  ok   a model that painted the wrong ground is still salvaged, and said so")
+
+    # Composited lettering, on the four styles that opted in. The check that
+    # matters is not "did it draw something" but "did it stay out of the way":
+    # the art is upscaled to size[1] - band, so a glyph above the band or an art
+    # pixel inside it means the two are overlapping on a real shirt.
+    SIZE = (TARGET_W, TARGET_H)
+    spec = {"line_1": "Pickleball Dad Retro Sunset", "arrangement": "stacked",
+            "case": "upper", "position": "below", "truncated": False,
+            "strategy": "composited"}
+    style = {"id": "verify", "name": "Verify", "graphic": "g", "lettering": "l",
+             "text_layout": {"arrangement": "stacked", "case": "upper",
+                             "font_role": "display", "position": "below",
+                             "text_strategy": "composited"}}
+
+    plan = lettering.plan_from(spec, style, SIZE)
+    assert plan is not None and plan.ok, plan.failures
+    band = plan.band_height(SIZE)
+    assert band > 0, "position 'below' reserved no band"
+
+    lettered = make_print_ready(art(tmp / "type.png"), tmp / "type_print.png",
+                                requested_ground="#FF00FF", size=SIZE, lettering=plan)
+    assert lettered.ok, lettered.failures
+    assert not lettered.warnings or all("ground" in w for w in lettered.warnings), \
+        lettered.warnings
+    report = check_print_ready(tmp / "type_print.png")
+    assert report.ok, report.failures
+
+    # Byte-exact disjointness: the region above the band must equal the same art
+    # rendered onto a canvas that short. Cheaper and stricter than eyeballing a
+    # bounding box, and it fails loudly if the seating offset is ever dropped.
+    short = make_print_ready(art(tmp / "short.png"), tmp / "short_print.png",
+                             requested_ground="#FF00FF",
+                             size=(TARGET_W, TARGET_H - band))
+    assert short.ok, short.failures
+    full = Image.open(tmp / "type_print.png")
+    assert full.crop((0, 0, TARGET_W, TARGET_H - band)).tobytes() \
+        == Image.open(tmp / "short_print.png").tobytes(), \
+        "the artwork and the type are not disjoint"
+    assert full.crop((0, TARGET_H - band, TARGET_W, TARGET_H)) \
+        .getchannel("A").getbbox(), "the reserved band is empty"
+
+    print(f"  ok   lettering typeset into a {band}px band, disjoint from the art "
+          f"({lettered.facts['lettering']})")
+    print(f"       ink {lettered.facts['lettering_ink_source']}, "
+          f"edge_opaque {report.facts['edge_opaque']}, licence "
+          f"{plan.facts['font_licence']}")
 PY
 
 echo

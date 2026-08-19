@@ -33,6 +33,7 @@ from .content_policy import ContentPolicy, check_record
 from .env import load_env_file
 from .imagegen import generate_for_record
 from .imageqa import qa_record
+from .lettering import is_composited
 from .ingest import ingest, load_rows
 from .listing import generate as generate_listing
 from .models import ContentPolicyStatus, Gate, PipelineStatus, TmStatus
@@ -181,11 +182,18 @@ def cmd_prompts(args) -> int:
 
     total = sum(len(r.variations) for r in touched)
     print(f"prompts: records={len(touched)} variations={total}")
-    print("  note: text is model-rendered and unverified -- spelling errors "
-          "will reach the review queue")
+    typeset = sum(1 for r in touched for v in r.variations
+                  if is_composited(v.text_spec))
+    if typeset < total:
+        print(f"  note: {total - typeset} of {total} ask the model to draw the "
+              "lettering -- spelling errors will reach the review queue")
+    if typeset:
+        print(f"  note: {typeset} of {total} are typeset in printready, so the "
+              "prompt asks for artwork only")
     for rec in touched:
         for var in rec.variations:
-            print(f"  {rec.niche[:24]:<24} {var.style_name}")
+            how = "typeset" if is_composited(var.text_spec) else "model-drawn"
+            print(f"  {rec.niche[:24]:<24} {var.style_name:<30} {how}")
     return 0
 
 
@@ -297,8 +305,14 @@ def cmd_printready(args) -> int:
     It does not advance `pipeline_status`. The record stays in the review queue,
     for the same reason `images` leaves it there: producing a file is not a
     review, and the manual check is the pipeline's safety property.
+
+    The style database is loaded because this is where composited lettering is
+    typeset -- a style that opted in gets its text drawn here, from
+    text_spec.line_1, instead of relying on the model having spelled it. Styles
+    that did not opt in are unaffected.
     """
     store = Store(args.store)
+    styles = StyleDatabase.load(args.styles).styles
     touched, totals = [], {"produced": 0, "skipped": 0, "failed": 0}
 
     for rec in store.all():
@@ -307,7 +321,7 @@ def cmd_printready(args) -> int:
         before = rec.pipeline_status
         summary = printready_record(rec, out_dir=args.out_dir or None,
                                     method=args.method, force=args.force,
-                                    tolerance=args.tolerance)
+                                    tolerance=args.tolerance, styles=styles)
         rec.pipeline_status = before
         for field_name in totals:
             totals[field_name] += getattr(summary, field_name)
@@ -388,7 +402,8 @@ def cmd_review(args) -> int:
         for i, var in enumerate(rec.variations):
             text = var.text_spec.get("line_1", "")
             decided = f"  [{var.review_decision}]" if var.review_decision else ""
-            print(f"    [{i}] {var.style_name} -- text: {text!r}{decided}")
+            how = " [typeset]" if is_composited(var.text_spec) else ""
+            print(f"    [{i}] {var.style_name} -- text: {text!r}{how}{decided}")
             if var.image_path:
                 print(f"        {var.image_path}")
             if var.print_path:
@@ -398,8 +413,20 @@ def cmd_review(args) -> int:
         print(f"    source     {rec.source_url}")
         print()
 
-    print("Check generated lettering against the text shown above -- it is "
-          "model-rendered and not verified.")
+    # What to look at differs by strategy, and saying the wrong one wastes the
+    # only attention this pipeline gets: telling someone to spell-check a typeset
+    # design spends the pass that should have gone to the artwork.
+    typeset = sum(1 for r in queue for v in r.variations
+                  if is_composited(v.text_spec))
+    drawn = sum(len(r.variations) for r in queue) - typeset
+    if drawn:
+        print(f"Check the lettering on the {drawn} model-drawn design(s) against "
+              "the text shown above -- the model drew those letters and nothing "
+              "verified them.")
+    if typeset:
+        print(f"The {typeset} marked [typeset] carry that string exactly. What to "
+              "look for on those is letterforms the model drew into the artwork "
+              "anyway, after being asked not to.")
     print(f"Then: podauto approve {queue[0].id[:8]} --variation 0"
           f"   /   podauto reject {queue[0].id[:8]} --variation 1 --reason ...")
     return 0
@@ -491,8 +518,9 @@ def cmd_export(args) -> int:
     if args.copy_files:
         print(f"  {summary.copied} print file(s) copied to "
               f"{Path(args.out_dir) / 'files'}")
-    print("  each row is one Merch product; check the lettering in the print "
-          "file against intended_text before uploading")
+    print("  each row is one Merch product; compare the print file against "
+          "intended_text before uploading -- exactly, for a model-drawn design, "
+          "and for stray letterforms in the artwork on a typeset one")
     return 0
 
 
@@ -571,6 +599,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("printready", cmd_printready,
              "remove the ground and write the 4500x5400 transparent PNG")
+    # Needed here as well as in `prompts`: the style entry decides whether this
+    # stage typesets the lettering or leaves it to the generated artwork.
+    sp.add_argument("--styles", default=DEFAULT_STYLES)
     sp.add_argument("--out-dir", default="",
                     help="where print files go; default is beside the generated image")
     sp.add_argument("--method", choices=("auto", "vector", "raster"), default="auto",

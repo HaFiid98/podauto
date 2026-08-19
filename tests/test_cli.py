@@ -125,7 +125,30 @@ def test_review_command_runs_on_a_populated_store(pipeline, capsys):
     assert rc == 0
     assert "Pickleball Dad" in out
     # The manual check is the pipeline's safety property; the queue must say so.
-    assert "model-rendered" in out
+    # The fixture's three styles are all model_rendered, so it is the drawn-text
+    # instruction that has to be here.
+    assert "nothing verified them" in out
+
+
+def test_the_queue_tells_the_reviewer_what_to_look_for_per_strategy(pipeline, capsys):
+    """The two instructions are opposites and the wrong one wastes the only pass a
+    design gets: on a model-drawn design you spell-check the letters, on a typeset
+    one the string is exact and the hunt is for letterforms the model drew into the
+    artwork after being asked not to."""
+    store = pipeline
+    rec = by_niche(store)["Pickleball Dad"]
+    rec.variations[0].text_spec = dict(rec.variations[0].text_spec,
+                                       strategy="composited")
+    store.upsert(rec)
+
+    assert main(["--store", str(store.path), "review"]) == 0
+    out = capsys.readouterr().out
+
+    assert "[typeset]" in out, "the reviewer cannot tell the two apart"
+    assert "carry that string exactly" in out
+    assert "letterforms the model drew into the artwork" in out
+    # Two of the three are still model-drawn, so both instructions belong.
+    assert "2 model-drawn design(s)" in out
 
 
 # --- image stages --------------------------------------------------------

@@ -16,6 +16,8 @@ data/smoke*
 # Generated artwork. Regenerable from the store and the prompts, and each file is
 # hundreds of KB -- there is no version of this worth keeping in a repo.
 data/images/
+data/images_*/
+data/_preview/
 
 # Python
 .venv/

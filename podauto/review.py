@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import PipelineStatus, Record, StyleVariation
-from .printready import IGNORED_GROUND_PHRASE
+from .printready import IGNORED_GROUND_PHRASE, OVERLAY_LEGIBILITY_PHRASE
 
 # What an approval looks like in StyleVariation.review_decision. A rejection
 # stores its reason there instead, so this marker is what distinguishes the two.
@@ -49,7 +49,14 @@ APPROVED_MARK = "approved"
 #     ground-colour collision.
 #   DPI header -- both DPI warnings (imageqa.py:224, 228) say it themselves: the
 #     pixel dimensions are already right and printready writes the header.
-INFORMATIONAL_NOTES = (IGNORED_GROUND_PHRASE, "DPI header")
+#   overlay legibility -- fires on every composited design whose style positions
+#     the text center_overlay, so it is a standing instruction to the reviewer
+#     rather than a defect report. Blocking on it would put --force on a whole
+#     class of designs. It is here because the concern is real and new: the type
+#     and the art were produced independently, so nothing has checked that the
+#     words read against what the model painted under them.
+INFORMATIONAL_NOTES = (IGNORED_GROUND_PHRASE, "DPI header",
+                       OVERLAY_LEGIBILITY_PHRASE)
 
 EXPORT_COLUMNS = [
     "record_id", "niche", "style_id", "style_name",

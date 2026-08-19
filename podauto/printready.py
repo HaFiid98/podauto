@@ -1,6 +1,6 @@
 """Generated art -> the file Merch actually accepts: 4500x5400, transparent.
 
-Two operations, in this order, because each depends on the previous one being
+Three operations, in this order, because each depends on the previous one being
 exact:
 
 1. **Strip the ground.** The generation is a full-bleed rectangle -- the model
@@ -19,6 +19,13 @@ exact:
    edges into soft ramps, while re-rasterizing a traced curve is sharp at any
    size. If either library is missing this falls back to LANCZOS and says so in
    `method`, because a soft print is worth more than no print.
+
+3. **Typeset the lettering**, for the styles that opt in. Optional and off by
+   default: pass no plan and this module behaves exactly as it did before. See
+   `lettering.py` for why -- text is the pipeline's measured defect, and drawing
+   it here instead of asking the model for it removes the defect class. The band
+   is taken off the canvas *before* step 2 so the artwork rasterizes straight to
+   its final height; scaling it again afterwards would undo the point of tracing.
 
 The collision measurement is the reason this module reports facts rather than
 just writing a file. Removal can only fail one way that matters: when the ground
@@ -45,6 +52,7 @@ from typing import Any
 
 from PIL import Image, ImageChops
 
+from . import lettering as _lettering
 from .imageqa import TARGET_H, TARGET_W
 from .models import Record, StyleVariation
 
@@ -85,6 +93,10 @@ MAX_GROUND = 0.98
 # the requested ground, so the note fires on essentially every design while the
 # files themselves pass print QA. See review.INFORMATIONAL_NOTES.
 IGNORED_GROUND_PHRASE = "ignored the ground instruction"
+
+# Same contract as above: review.py matches on this substring, so rewording the
+# warning without rewording the constant silently reclassifies it as blocking.
+OVERLAY_LEGIBILITY_PHRASE = "position center_overlay"
 
 PRINT_SUFFIX = "_print.png"
 
@@ -367,7 +379,9 @@ def make_print_ready(src: str | Path, out: str | Path,
                      requested_ground: str | None = None,
                      method: str = "auto",
                      tolerance: int = GROUND_TOLERANCE,
-                     size: tuple[int, int] = (TARGET_W, TARGET_H)) -> PrintResult:
+                     size: tuple[int, int] = (TARGET_W, TARGET_H),
+                     lettering: _lettering.LetteringPlan | None = None,
+                     ) -> PrintResult:
     """Ground-removed, 4500x5400, 300dpi PNG at `out`. Never raises on bad input.
 
     `method` is "auto" (trace if the tools import, else LANCZOS), "vector", or
@@ -378,6 +392,14 @@ def make_print_ready(src: str | Path, out: str | Path,
     `size` defaults to Merch's standard placement and exists so a second
     placement size does not need a second code path; tests use a small one to
     avoid rasterizing 24 megapixels per assertion.
+
+    `lettering` defaults to None, which is the model_rendered path and byte-for-byte
+    what this function did before it existed. Given a plan, the type is typeset
+    over the finished canvas and the artwork is scaled into whatever the text band
+    leaves. A plan that cannot be rendered is a *warning*, not a failure: the file
+    is still worth writing, and an unclassified qa_note already stops the approval
+    (see review.INFORMATIONAL_NOTES), so a human looks at a design that lost its
+    lettering instead of it exporting silently.
     """
     result = PrintResult(path=str(out))
     src = Path(src)
@@ -397,10 +419,47 @@ def make_print_ready(src: str | Path, out: str | Path,
     result.warnings.extend(removal.warnings)
     result.facts["source"] = f"{src.name} {removal.image.width}x{removal.image.height}"
 
+    layer, band = None, 0
+    if lettering is not None:
+        result.warnings.extend(lettering.failures)
+        result.warnings.extend(lettering.warnings)
+        if lettering.ok:
+            ink = lettering.ink
+            if ink:
+                result.facts["lettering_ink_source"] = "style override"
+            else:
+                # The keyed ground, not the requested one: what contaminates the
+                # palette is the colour the model actually painted.
+                ink, how = _lettering.sample_ink(removal.image,
+                                                 avoid=removal.facts.get("ground"))
+                result.facts["lettering_ink_source"] = how
+            band = lettering.band_height(size)
+            layer = _lettering.render(lettering, size, ink, band)
+            if not band:
+                # Nothing measures whether overlaid type is readable, and on a
+                # composited design the two halves were produced independently:
+                # measured on the first real run, one center_overlay design landed
+                # Anton over a busy dark illustration the model drew instead of the
+                # backdrop block its prompt asked for, and the words disappeared
+                # into it. Informational by classification -- it fires on every
+                # overlay, so blocking would make --force routine and waste the
+                # gate that catches a damaged file.
+                result.warnings.append(
+                    f"typeset text is overlaid on the artwork rather than banded "
+                    f"({OVERLAY_LEGIBILITY_PHRASE}) -- it is spelled correctly by "
+                    f"construction, so what to check is whether it reads against "
+                    f"what the model painted underneath")
+            result.facts["lettering_band"] = band
+        result.facts["lettering"] = (
+            " ".join(f"{k}={v}" for k, v in lettering.facts.items()
+                     if k != "font_licence") or "not drawn")
+
+    art_h = size[1] - band
+
     scaled = None
     if method in ("auto", "vector"):
         try:
-            scaled = vector_upscale(removal.image, size[1])
+            scaled = vector_upscale(removal.image, art_h)
             result.method = "vector"
         except Exception as exc:                                   # noqa: BLE001
             if method == "vector":
@@ -411,10 +470,17 @@ def make_print_ready(src: str | Path, out: str | Path,
                 f"vectorize unavailable ({type(exc).__name__}), fell back to a "
                 f"LANCZOS upscale -- edges will be softer than a traced print")
     if scaled is None:
-        scaled = raster_upscale(removal.image, size[1])
+        scaled = raster_upscale(removal.image, art_h)
         result.method = result.method or "raster"
 
-    final = fit_to_canvas(scaled, size)
+    final = fit_to_canvas(scaled, (size[0], art_h))
+    if band:
+        # The art canvas is short by `band`; seat it at the end the text is not on.
+        seated = Image.new("RGBA", size, (0, 0, 0, 0))
+        seated.alpha_composite(final, (0, band if lettering.position == "above" else 0))
+        final = seated
+    if layer is not None:
+        final.alpha_composite(layer)
     result.facts["scaled"] = f"{scaled.width}x{scaled.height}"
     result.facts["canvas"] = f"{final.width}x{final.height}"
 
@@ -457,7 +523,8 @@ def print_path_for(variation: StyleVariation, out_dir: str | Path | None = None)
 def printready_variation(variation: StyleVariation, out_dir: str | Path | None = None,
                          method: str = "auto", force: bool = False,
                          tolerance: int = GROUND_TOLERANCE,
-                         size: tuple[int, int] = (TARGET_W, TARGET_H)
+                         size: tuple[int, int] = (TARGET_W, TARGET_H),
+                         style: dict[str, Any] | None = None,
                          ) -> PrintResult | None:
     """Produce one print-ready file, or None if there is nothing to work from.
 
@@ -465,6 +532,11 @@ def printready_variation(variation: StyleVariation, out_dir: str | Path | None =
     collision is precisely the thing a human should look at the file for. Notes
     are de-duplicated because this command is re-runnable and an accumulating
     list of identical warnings makes the queue unreadable.
+
+    `style` is the style's config entry, and it is what decides whether the
+    lettering is typeset here or was the model's job -- `lettering.plan_from`
+    returns None for every style that has not opted in, so omitting it keeps the
+    old behaviour rather than changing it.
     """
     if not variation.image_path:
         return None
@@ -473,9 +545,10 @@ def printready_variation(variation: StyleVariation, out_dir: str | Path | None =
     if not force and variation.print_path and Path(variation.print_path).is_file():
         return None
 
-    result = make_print_ready(variation.image_path, target,
-                              requested_ground=variation.ground_hint,
-                              method=method, tolerance=tolerance, size=size)
+    result = make_print_ready(
+        variation.image_path, target, requested_ground=variation.ground_hint,
+        method=method, tolerance=tolerance, size=size,
+        lettering=_lettering.plan_from(variation.text_spec, style, size))
     if result.ok:
         variation.print_path = str(target)
     for warning in result.warnings:
@@ -492,13 +565,21 @@ def printready_variation(variation: StyleVariation, out_dir: str | Path | None =
 def printready_record(record: Record, out_dir: str | Path | None = None,
                       method: str = "auto", force: bool = False,
                       tolerance: int = GROUND_TOLERANCE,
-                      size: tuple[int, int] = (TARGET_W, TARGET_H)) -> PrintSummary:
+                      size: tuple[int, int] = (TARGET_W, TARGET_H),
+                      styles: dict[str, dict[str, Any]] | None = None
+                      ) -> PrintSummary:
     """Every generated variation of one record. Does not touch pipeline_status:
-    the record stays in the review queue it is already in."""
+    the record stays in the review queue it is already in.
+
+    `styles` is StyleDatabase.styles -- already a style_id -> config dict, so no
+    lookup type is introduced for this.
+    """
     summary = PrintSummary()
+    styles = styles or {}
     for variation in record.variations:
         result = printready_variation(variation, out_dir, method, force,
-                                      tolerance, size)
+                                      tolerance, size,
+                                      styles.get(variation.style_id))
         if result is None:
             summary.skipped += 1
             continue

@@ -1,16 +1,27 @@
 """Design prompt synthesis.
 
-Text strategy is MODEL_RENDERED: each variation emits one prompt carrying both
-artwork and lettering, and the model draws the letters itself. Image models draw
-letterforms rather than typeset them, so spelling is not guaranteed and no
-verification stage is configured -- misspelled or malformed lettering reaches
-the manual review queue. That tradeoff was chosen deliberately; the design here
-keeps it reversible.
+Text strategy is per style, declared in config/styles.json as
+`text_layout.text_strategy`:
 
-Reversibility hinges on one thing: StyleVariation.text_spec is populated with
-the intended string even in model_rendered mode, where nothing reads it. Turning
-on OCR verification or composed text later reads from that field instead of
-requiring a schema change and a re-run of everything already generated.
+* MODEL_RENDERED (the default) -- one prompt carries both artwork and lettering
+  and the model draws the letters itself. Image models draw letterforms rather
+  than typeset them, so spelling is not guaranteed and no verification stage is
+  configured: misspelled or malformed lettering reaches the manual review queue.
+  Measured, that is the majority outcome -- 2 of the first 3 real generations
+  failed on text while all 3 had usable artwork. The tradeoff was chosen
+  deliberately, and it is still right for styles whose lettering is a *treatment*
+  (chrome bevels, crackle distress, ransom-note cut-paper) that no font can give.
+
+* COMPOSITED -- the prompt asks for artwork only, states plainly that it must
+  contain no text, and `printready` typesets `text_spec.line_1` with freetype.
+  The spelling is then exact by construction. What it cannot promise is that the
+  model kept its side of the bargain and drew no letterforms in the art; that
+  remains a review-queue matter, because OCR was declined deliberately.
+
+That the switch is a config edit rather than a migration is down to one thing:
+StyleVariation.text_spec has always been populated with the intended string, even
+in model_rendered mode where nothing read it back. `lettering.plan_from` reads
+that field, and everything already generated stays loadable.
 
 Two corrections to the original spec, both load-bearing:
 
@@ -101,12 +112,19 @@ def ground_for_style(style: dict[str, Any]) -> str:
     return GROUND_CANDIDATES[0][0]
 
 
-def output_suffix(ground: str) -> str:
+def output_suffix(ground: str, composited: bool = False) -> str:
     """The tail of every prompt: medium, then the ground contract.
 
     Plain descriptive language only -- no CLI-style flags. The ground is stated
     twice on purpose, once as what to paint and once as what the artwork must not
     contain, because the second half is the part that makes it removable.
+
+    `composited` adds the text negation, in the same plain-language register as
+    the existing "no garment, no fabric, no mockup" -- the lettering is typeset in
+    `printready`, so anything the model draws is a second set of words on the same
+    shirt. Like the ground instruction this is a request, not a contract; the
+    difference is that a model which ignores it produces stray letterforms in the
+    art rather than a misspelling of the title.
     """
     name = GROUND_NAMES.get(ground, "chroma")
     return (
@@ -116,7 +134,9 @@ def output_suffix(ground: str) -> str:
         f"({ground}) that fills every corner, "
         f"no {name} anywhere in the artwork itself, "
         "no gradient or texture in the background, "
-        "no garment, no fabric, no mockup"
+        + ("no text, no letters, no words, no lettering, no writing, "
+           if composited else "")
+        + "no garment, no fabric, no mockup"
     )
 
 
@@ -185,13 +205,17 @@ def affinity(tokens: set[str], style: dict[str, Any]) -> int:
     return score
 
 
+MODEL_RENDERED = "model_rendered"
+COMPOSITED = "composited"
+
+
 @dataclass
 class TextSpec:
     """The intended lettering.
 
-    Populated even in model_rendered mode, where no code reads `line_1` back.
-    That is deliberate: it is the hook that makes switching strategies later a
-    config change rather than a migration.
+    Populated in both strategies. In model_rendered nothing reads `line_1` back,
+    which is what kept switching a style over to composited a config change
+    rather than a migration -- `lettering.plan_from` reads exactly these fields.
     """
 
     line_1: str
@@ -199,6 +223,7 @@ class TextSpec:
     case: str = "upper"
     position: str = "center_overlay"
     truncated: bool = False
+    strategy: str = MODEL_RENDERED
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -207,7 +232,7 @@ class TextSpec:
             "case": self.case,
             "position": self.position,
             "truncated": self.truncated,
-            "strategy": "model_rendered",
+            "strategy": self.strategy,
         }
 
 
@@ -230,8 +255,16 @@ def _apply_case(text: str, case: str) -> str:
 
 def build_prompt(style: dict[str, Any], record: Record, text: TextSpec,
                  ground: str | None = None) -> str:
-    """One prompt carrying artwork, lettering and the removable ground together."""
+    """One prompt carrying artwork, the removable ground, and -- unless the style
+    composites its own lettering -- the text.
+
+    For a composited style the text request and the style's `lettering` fragment
+    are both dropped. Leaving either in is the one way this change fails
+    invisibly: the model draws its own words, `printready` typesets the real ones
+    on top, and the shirt carries two sets of lettering.
+    """
     layout = style.get("text_layout", {})
+    composited = text.strategy == COMPOSITED
     rendered = _apply_case(text.line_1, layout.get("case", text.case))
     ground = ground or ground_for_style(style)
 
@@ -239,14 +272,16 @@ def build_prompt(style: dict[str, Any], record: Record, text: TextSpec,
         f"{record.niche} t-shirt design",
         style["graphic"],
     ]
-    if style.get("lettering"):
+    if style.get("lettering") and not composited:
         parts.append(style["lettering"])
-    # Quoting the string and stating it plainly is the one prompt-level lever
-    # that reliably helps text accuracy.
-    parts.append(f'the design includes the text "{rendered}", spelled exactly as written')
+    if not composited:
+        # Quoting the string and stating it plainly is the one prompt-level lever
+        # that reliably helps text accuracy.
+        parts.append(
+            f'the design includes the text "{rendered}", spelled exactly as written')
     if style.get("palette_hint"):
         parts.append(f"palette: {style['palette_hint']}")
-    parts.append(output_suffix(ground))
+    parts.append(output_suffix(ground, composited=composited))
 
     return ", ".join(parts)
 
@@ -325,6 +360,7 @@ def synthesize(record: Record, db: StyleDatabase, configured_variations: int,
             case=layout.get("case", text.case),
             position=layout.get("position", text.position),
             truncated=text.truncated,
+            strategy=layout.get("text_strategy", MODEL_RENDERED),
         )
         ground = ground_for_style(style)
         record.variations.append(StyleVariation(
