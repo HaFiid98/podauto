@@ -24,9 +24,12 @@ from podauto.models import PipelineStatus, Record, StyleVariation
 from podauto.printready import (
     OVERLAY_LEGIBILITY_PHRASE,
     ALPHA_FLOOR,
+    ART_MARGIN,
     as_rgb,
     border_colour,
     fit_to_canvas,
+    fit_width,
+    inset_box,
     make_print_ready,
     print_path_for,
     printready_record,
@@ -178,6 +181,92 @@ def test_fit_to_canvas_pads_instead_of_stretching():
 def test_fit_to_canvas_crops_something_oversized_rather_than_failing():
     art = Image.new("RGBA", (300, 400), (10, 20, 30, 255))
     assert fit_to_canvas(art, (100, 120)).size == (100, 120)
+
+
+def full_bleed(size=SMALL, ground=MAGENTA) -> Image.Image:
+    """Art that runs off the top and bottom of the frame, leaving ground at the
+    sides -- which is what the providers actually return. Measured on 3 of 3 real
+    generations: the alpha bbox after removal is (0, 0, 848, 1024), touching every
+    edge, because the model paints past the canvas.
+
+    Every other fixture here centres the art with clearance around it, so none of
+    them can catch a print file whose art sits on the border. That is exactly how
+    2 of 3 real print files came to fail MAX_EDGE_OPAQUE with the suite green.
+    """
+    img = Image.new("RGB", size, ground)
+    d = ImageDraw.Draw(img)
+    w, h = size
+    d.ellipse((w // 10, -h // 4, w * 9 // 10, h * 5 // 4), fill=INK)
+    d.rectangle((w // 5, h * 2 // 5, w * 4 // 5, h * 3 // 5), fill=GOLD)
+    return img
+
+
+def test_the_art_is_inset_so_full_bleed_art_clears_the_border(tmp_path):
+    """The regression. Without the inset this same source measures edge_opaque
+    0.2836 against a 0.02 limit -- the fixture is built to fail loudly if the
+    margin stops being applied, rather than to pass for its own reasons."""
+    src = tmp_path / "bleed.png"
+    full_bleed().save(src)
+    out = tmp_path / "bleed_print.png"
+
+    result = make_print_ready(src, out, requested_ground="#FF00FF", method="raster")
+
+    assert result.ok, result.failures
+    assert check_print_ready(out).ok, check_print_ready(out).failures
+
+
+def test_the_margin_clears_all_four_borders_not_just_the_one_that_failed(tmp_path):
+    """Per-border, because the real failure was top-heavy (top 0.1411, left and
+    right 0.0000) and a check that only looked at the overall vote -- or at one
+    axis -- would have passed a fix that inset the art vertically alone."""
+    src = tmp_path / "bleed2.png"
+    full_bleed().save(src)
+    out = tmp_path / "bleed2_print.png"
+    assert make_print_ready(src, out, requested_ground="#FF00FF",
+                            method="raster").ok
+
+    with Image.open(out) as img:
+        left, top, right, bottom = img.getchannel("A").getbbox()
+        clear_x = round(TARGET_W * ART_MARGIN)
+        clear_y = round(TARGET_H * ART_MARGIN)
+
+    # Guard the guard: at ART_MARGIN 0 the clearances below are 0 and every
+    # assertion here holds vacuously, so the case would survive the margin being
+    # switched off -- which is the one change it exists to catch.
+    assert clear_x > 0 and clear_y > 0, "no margin is configured to check"
+    assert left >= clear_x and TARGET_W - right >= clear_x, (left, right)
+    assert top >= clear_y and TARGET_H - bottom >= clear_y, (top, bottom)
+
+
+def test_art_wider_than_the_canvas_is_clamped_instead_of_overflowing():
+    """`vector_upscale` and `raster_upscale` take a height only, so on art wider
+    than 5:6 the height fit alone spends the inset sideways. Nothing the providers
+    return today is that wide, which is why this is asserted rather than assumed."""
+    inner_h, inner_w = inset_box((TARGET_W, TARGET_H))
+    wide = Image.new("RGBA", (round(inner_h * 1.4), inner_h), (10, 20, 30, 255))
+
+    fitted = fit_width(wide, inner_w)
+
+    assert fitted.width == inner_w
+    assert fitted.height < inner_h, "the aspect was not preserved"
+    assert fit_width(Image.new("RGBA", (inner_w - 1, 10)), inner_w).width == inner_w - 1
+
+
+@pytest.mark.parametrize("lines", [1, 2, 3])
+def test_the_inset_is_taken_from_the_art_box_not_the_band(lines):
+    """The margin scales the art inside `art_h`, so a band still takes exactly its
+    own height off the art and the inset is measured against what is left. If the
+    inset were taken from the full canvas instead, the art box and the band would
+    overlap by the margin and the byte-exact disjointness case would break --
+    stated here directly because that case would report it as a mystery diff."""
+    band = round(TEST_SIZE[1] * lettering.BAND_BY_LINES[lines])
+    art_h = TEST_SIZE[1] - band
+
+    inner_h, _ = inset_box((TEST_SIZE[0], art_h))
+
+    assert inner_h == round(art_h * (1 - 2 * ART_MARGIN))
+    assert inner_h < art_h, "no margin was reserved"
+    assert inner_h + band < TEST_SIZE[1], "the art and the band would collide"
 
 
 # --- the whole stage ----------------------------------------------------
@@ -381,11 +470,15 @@ def print_with(tmp_path, clean_png, plan=None, size=TEST_SIZE, name="p.png"):
 
 def test_passing_no_plan_changes_nothing_about_the_file(tmp_path, clean_png):
     """The default path, and 8 of 12 styles stay on it. The lettering parameter
-    defaults to None so every existing caller -- tests, verify.sh stage 7, any
-    record synthesized before this existed -- produces the same bytes as before."""
+    defaults to None, so a record synthesized before lettering existed takes the
+    same path it always did and no lettering fact appears.
+
+    The bbox moved in from (44, 54, 208, 248) when ART_MARGIN was introduced --
+    every print file is inset now, lettered or not. That is the whole point of the
+    margin and not a lettering effect, which is what this case pins."""
     plain, result = print_with(tmp_path, clean_png, name="plain.png")
     assert not [k for k in result.facts if "lettering" in k], result.facts
-    assert plain.getchannel("A").getbbox() == (44, 54, 208, 248)
+    assert plain.getchannel("A").getbbox() == (47, 58, 205, 244)
 
 
 def test_a_lettered_file_still_passes_the_print_gate_at_the_real_size(tmp_path,

@@ -165,10 +165,12 @@ echo "=============================================================="
 # supplies its own input rather than depending on quota being spent. Each case
 # earns its place: a clean ground must key out to a passing print file; a ground
 # colour reused inside the artwork must survive removal and be reported (that
-# collision was measured in 2 of the first 3 real generations); and composited
-# lettering must typeset into a reserved band without touching the artwork or the
-# canvas border. The last one needs no key and no quota -- the fonts are committed
-# -- so it is the only part of the text path a fresh clone can verify offline.
+# collision was measured in 2 of the first 3 real generations); art that bleeds off
+# the frame -- what the providers actually return -- must be inset clear of the
+# border rather than printed onto it; and composited lettering must typeset into a
+# reserved band without touching the artwork or the canvas border. That last one
+# needs no key and no quota -- the fonts are committed -- so it is the only part of
+# the text path a fresh clone can verify offline.
 python - <<'PY' || fail=1
 import tempfile
 from pathlib import Path
@@ -177,7 +179,7 @@ from PIL import Image, ImageDraw
 
 from podauto import lettering
 from podauto.imageqa import TARGET_H, TARGET_W, check_print_ready
-from podauto.printready import make_print_ready
+from podauto.printready import ART_MARGIN, make_print_ready
 
 GROUND = (255, 0, 255)
 
@@ -218,6 +220,33 @@ with tempfile.TemporaryDirectory() as tmp:
                              requested_ground="#00FF00")
     assert any("ignored the ground instruction" in w for w in wrong.warnings), wrong.warnings
     print("  ok   a model that painted the wrong ground is still salvaged, and said so")
+
+    # Full-bleed art, which is what the providers actually return: the alpha bbox
+    # after removal was (0, 0, 848, 1024) on 3 of 3 real generations, touching every
+    # edge. The art is scaled into ART_MARGIN rather than to fill the canvas, and
+    # without that inset this same source measures edge_opaque 0.28 against a 0.02
+    # limit -- which is how 2 of 3 real print files came to be unapprovable while
+    # every fixture above (art centred with clearance) stayed green.
+    bleed = Image.new("RGB", (848, 1024), GROUND)
+    d = ImageDraw.Draw(bleed)
+    d.ellipse((85, -250, 760, 1280), fill=(20, 40, 90))
+    d.rectangle((170, 410, 680, 615), fill=(230, 180, 40))
+    bleed.save(tmp / "bleed.png")
+
+    bled = make_print_ready(tmp / "bleed.png", tmp / "bleed_print.png",
+                            requested_ground="#FF00FF")
+    assert bled.ok, bled.failures
+    report = check_print_ready(tmp / "bleed_print.png")
+    assert report.ok, report.failures
+    left, top, right, bottom = \
+        Image.open(tmp / "bleed_print.png").getchannel("A").getbbox()
+    clear_x, clear_y = round(TARGET_W * ART_MARGIN), round(TARGET_H * ART_MARGIN)
+    assert clear_x > 0 and clear_y > 0, "no margin is configured to check"
+    assert left >= clear_x and TARGET_W - right >= clear_x, (left, right)
+    assert top >= clear_y and TARGET_H - bottom >= clear_y, (top, bottom)
+    print(f"  ok   art that bleeds off the frame is inset clear of the border "
+          f"(edge_opaque {report.facts['edge_opaque']}, margin {ART_MARGIN:.0%}, "
+          f"clearance {left}/{TARGET_W - right}px x {top}/{TARGET_H - bottom}px)")
 
     # Composited lettering, on the four styles that opted in. The check that
     # matters is not "did it draw something" but "did it stay out of the way":

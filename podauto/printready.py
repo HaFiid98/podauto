@@ -86,6 +86,16 @@ MIN_GROUND = 0.05
 # artwork and ate it, which is the failure mode a palette collision produces.
 MAX_GROUND = 0.98
 
+# Free margin the artwork is scaled to fit inside, as a fraction of the canvas.
+# Not cosmetic: the generation is full-bleed -- alpha bbox (0,0,848,1024) on 3 of 3
+# real sources, touching every edge -- so scaling the art to fill the canvas puts
+# whatever the model ran off the frame onto the 1px border `imageqa` votes on.
+# Measured through the vector path on those 3 files: edge_opaque 0.0328 / 0.0253 /
+# 0.0027 became 0.0000 / 0.0000 / 0.0000 at this value, where 2 of the 3 had been
+# failing MAX_EDGE_OPAQUE outright and so could not be approved at all. The cost is
+# 4% of design height, which is why it is this small rather than lettering's 0.04/0.06.
+ART_MARGIN = 0.02
+
 # The phrase that identifies the "model painted a different ground" warning in a
 # variation's qa_notes. Named because review.py classifies that warning as
 # informational rather than blocking, and matching on the whole sentence would put
@@ -353,6 +363,32 @@ def raster_upscale(rgba: Image.Image, height: int = TARGET_H) -> Image.Image:
     return rgba.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def inset_box(size: tuple[int, int] = (TARGET_W, TARGET_H)) -> tuple[int, int]:
+    """The (height, width) the artwork is scaled to fit inside `size`.
+
+    Returned height-first because that is the order the upscalers take: both
+    `vector_upscale` and `raster_upscale` are height-driven, and the width is a
+    clamp applied afterwards by `fit_width`.
+    """
+    return (round(size[1] * (1 - 2 * ART_MARGIN)),
+            round(size[0] * (1 - 2 * ART_MARGIN)))
+
+
+def fit_width(img: Image.Image, limit: int) -> Image.Image:
+    """Scale `img` down, aspect preserved, if it is wider than `limit`.
+
+    The upscalers only take a height, so on art wider than the canvas aspect the
+    height fit alone overflows sideways and spends the inset on the left and right
+    borders -- the two edges the current generations happen not to touch. Inert at
+    the 848x1024 (0.828) the providers return, load-bearing for anything wider
+    than 5:6, and this is the whole reason the inset is a box and not one number.
+    """
+    if img.width <= limit:
+        return img
+    return img.resize((limit, max(1, round(img.height * limit / img.width))),
+                      Image.Resampling.LANCZOS)
+
+
 def fit_to_canvas(img: Image.Image, size: tuple[int, int] = (TARGET_W, TARGET_H)
                   ) -> Image.Image:
     """Centre `img` on an exactly `size` transparent canvas, padding or cropping.
@@ -360,8 +396,9 @@ def fit_to_canvas(img: Image.Image, size: tuple[int, int] = (TARGET_W, TARGET_H)
     Padding rather than resizing to the exact target is what keeps the artwork
     undistorted. The generation is 848x1024 (0.8281) and the print canvas is 5:6
     (0.8333) -- resizing into it would stretch every design by 0.6% horizontally
-    for no reason, where padding adds 14 transparent pixels a side that print as
-    nothing at all.
+    for no reason, where padding costs only transparent pixels that print as
+    nothing at all. `make_print_ready` scales the art into `inset_box` first, so
+    in practice the pad it adds is that margin plus the aspect difference.
     """
     tw, th = size
     if img.width > tw or img.height > th:
@@ -455,11 +492,15 @@ def make_print_ready(src: str | Path, out: str | Path,
                      if k != "font_licence") or "not drawn")
 
     art_h = size[1] - band
+    # The art is scaled into an inset box rather than the full one, and then padded
+    # back out by `fit_to_canvas`. `art_h` still sets the outer box, so a band keeps
+    # taking exactly its height off the art and the two stay disjoint.
+    inner_h, inner_w = inset_box((size[0], art_h))
 
     scaled = None
     if method in ("auto", "vector"):
         try:
-            scaled = vector_upscale(removal.image, art_h)
+            scaled = vector_upscale(removal.image, inner_h)
             result.method = "vector"
         except Exception as exc:                                   # noqa: BLE001
             if method == "vector":
@@ -470,9 +511,10 @@ def make_print_ready(src: str | Path, out: str | Path,
                 f"vectorize unavailable ({type(exc).__name__}), fell back to a "
                 f"LANCZOS upscale -- edges will be softer than a traced print")
     if scaled is None:
-        scaled = raster_upscale(removal.image, art_h)
+        scaled = raster_upscale(removal.image, inner_h)
         result.method = result.method or "raster"
 
+    scaled = fit_width(scaled, inner_w)
     final = fit_to_canvas(scaled, (size[0], art_h))
     if band:
         # The art canvas is short by `band`; seat it at the end the text is not on.
@@ -483,6 +525,9 @@ def make_print_ready(src: str | Path, out: str | Path,
         final.alpha_composite(layer)
     result.facts["scaled"] = f"{scaled.width}x{scaled.height}"
     result.facts["canvas"] = f"{final.width}x{final.height}"
+    # Recorded so a reviewer reading the facts can tell the art was inset rather
+    # than scaled small by a failed trace.
+    result.facts["art_margin"] = ART_MARGIN
 
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
