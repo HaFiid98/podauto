@@ -24,9 +24,13 @@ cfg.env = cfg.env || {};
 cfg.env.ANTHROPIC_BASE_URL = baseUrl;
 cfg.env.ANTHROPIC_AUTH_TOKEN = key;
 cfg.env.ANTHROPIC_API_KEY = key;
-cfg.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1';
+cfg.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '0';
 fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n');
 NODE
 
-export ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_AUTH_TOKEN="$KEY" ANTHROPIC_API_KEY="$KEY"
-exec claude
+
+export ANTHROPIC_BASE_URL="https://agentrouter.org/"
+export ANTHROPIC_AUTH_TOKEN="$KEY"
+export ANTHROPIC_API_KEY="$KEY"
+
+exec claude --model claude-opus-5 
