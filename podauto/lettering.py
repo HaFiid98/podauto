@@ -89,6 +89,45 @@ INK_MIN_SHARE = 0.01
 _BUCKET = 32
 _BUCKET_LUT = [i // _BUCKET * _BUCKET + _BUCKET // 2 for i in range(256)]
 
+# --- overlay legibility ----------------------------------------------------
+#
+# A band guarantees the type and the art do not overlap. An overlay guarantees
+# nothing, and the two halves were produced independently: measured on the first
+# real composited run, Anton over a busy dark illustration was spelled perfectly
+# and could not be read at all. So the overlay case is measured rather than merely
+# announced to the reviewer.
+
+# The garment the type is assumed to sit on. Art alpha is not opaque everywhere --
+# ground removal is what makes a print file -- and where it is transparent the
+# shirt itself is the background. Nothing in the pipeline records a garment
+# colour, so this is the same light-garment assumption INK_MAX_LUMA already
+# encodes, and it is the generous reading on purpose: a gate that fired on the
+# reviewer's unstated colour choice would be noise, not information.
+GARMENT_RGB = (255, 255, 255)
+
+# Contrast ratio, by WCAG's formula, that overlaid type has to reach against the
+# artwork under it. 3.0 is that standard's large-text threshold; merch lettering is
+# an order of magnitude bigger than the 18pt which qualifies, so this is
+# deliberately the loose end of the scale. The question being asked is "does the
+# word read on a shirt", not "does this pass an accessibility audit".
+MIN_CONTRAST = 3.0
+
+# How much of the type's own area may fall below MIN_CONTRAST before the design is
+# called unreadable. Not zero: a descender clipping the corner of one dark shape is
+# still a legible word, and every real generation has dark detail somewhere. A
+# tenth of the letterforms lost is about where a word stops reading.
+MAX_LOW_CONTRAST = 0.10
+
+# Height the measurement works at. A print canvas is 24 megapixels and the answer
+# does not change with resolution -- at 5400px every stem is hundreds of pixels
+# across, so a reduction to this still leaves each one many pixels wide.
+_CONTRAST_H = 360
+
+# Glyph coverage a reduced pixel needs to count as type rather than as the
+# anti-aliased edge of it. Area-averaging the mask down makes an edge pixel part
+# background, and measuring contrast there would compare the art against itself.
+_GLYPH_ALPHA = 250
+
 
 @dataclass(frozen=True)
 class Face:
@@ -481,6 +520,111 @@ def _as_rgb(colour: str | tuple[int, int, int] | None) -> tuple[int, int, int] |
         except ValueError:
             return None
     return tuple(colour)[:3]                                            # type: ignore[return-value]
+
+
+@lru_cache(maxsize=1)
+def _luminance_luts() -> tuple[list[float], list[float], list[float]]:
+    """Per-channel relative-luminance contributions for each 8-bit value.
+
+    WCAG's transfer function -- sRGB decoded to linear light, then weighted --
+    folded into three lookups so the per-pixel work below is two adds. Built once
+    rather than inlined because the whole point of measuring under the glyphs is
+    that there are a lot of pixels.
+    """
+    linear = [v / 255 / 12.92 if v / 255 <= 0.04045
+              else ((v / 255 + 0.055) / 1.055) ** 2.4 for v in range(256)]
+    return ([0.2126 * c for c in linear], [0.7152 * c for c in linear],
+            [0.0722 * c for c in linear])
+
+
+def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    """WCAG contrast ratio between two opaque colours: 1.0 identical, 21.0 for
+    black on white. Public because it is the one number the overlay gate is
+    expressed in, and a threshold nobody can check by hand is a threshold nobody
+    trusts."""
+    lr, lg, lb = _luminance_luts()
+    la = lr[a[0]] + lg[a[1]] + lb[a[2]]
+    lc = lr[b[0]] + lg[b[1]] + lb[b[2]]
+    return (max(la, lc) + 0.05) / (min(la, lc) + 0.05)
+
+
+@dataclass(frozen=True)
+class Legibility:
+    """What overlaid type measured against the artwork beneath it.
+
+    `low_share` is the gate; the other two are for the reviewer. `worst` is a 5th
+    percentile rather than the true minimum because the minimum is ~1.0 on any
+    real illustration -- the art's own anti-aliased edges put some shade of the
+    ink colour somewhere under the type on essentially every design, and a gate
+    keyed on that would fire always and mean nothing.
+    """
+
+    low_share: float = 0.0
+    median: float = 0.0
+    worst: float = 0.0
+    sampled: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.low_share <= MAX_LOW_CONTRAST
+
+
+def measure_contrast(layer: Image.Image, art: Image.Image,
+                     ink: str | tuple[int, int, int]) -> Legibility:
+    """How well the type on `layer` reads against the artwork on `art`.
+
+    Measured *under the glyphs* rather than across the canvas, which is the whole
+    design of this function: type over a busy illustration fails exactly where the
+    illustration is dark, and a whole-canvas average of a mostly-pale design
+    reports "fine" while the word sits in the one dark corner. So the mask the type
+    already produced is the sampling region.
+
+    Transparent art counts as GARMENT_RGB rather than being skipped -- a word half
+    over the design and half over bare shirt is legible, and skipping those pixels
+    would score it on its worst half alone.
+
+    Never raises: a bad size or an empty layer comes back as `sampled == 0`, which
+    `printready` reads as "nothing to say" rather than as a pass or a failure.
+    """
+    ink_rgb = _as_rgb(ink) or _as_rgb(DEFAULT_INK) or (0, 0, 0)
+    scale = min(1.0, _CONTRAST_H / max(1, layer.height))
+    work = (max(1, round(layer.width * scale)), max(1, round(layer.height * scale)))
+
+    # BOX is an area average, so a glyph that survives the reduction survives
+    # because it is solid, not because a sample point happened to land on it.
+    mask = layer.getchannel("A").resize(work, Image.Resampling.BOX)
+    under = art.convert("RGBA").resize(work, Image.Resampling.BOX)
+
+    lr, lg, lb = _luminance_luts()
+    ink_lum = lr[ink_rgb[0]] + lg[ink_rgb[1]] + lb[ink_rgb[2]]
+    seen: dict[tuple[int, int, int, int], float] = {}
+    ratios: list[float] = []
+    for cover, pixel in zip(mask.getdata(), under.getdata()):
+        if cover < _GLYPH_ALPHA:
+            continue
+        ratio = seen.get(pixel)
+        if ratio is None:
+            r, g, b, a = pixel
+            # Composite the art over the garment first: at a < 255 the shirt is
+            # part of what the eye sees behind the letter, so scoring the raw art
+            # colour would report a contrast the print does not have.
+            f = a / 255
+            bg = (round(r * f + GARMENT_RGB[0] * (1 - f)),
+                  round(g * f + GARMENT_RGB[1] * (1 - f)),
+                  round(b * f + GARMENT_RGB[2] * (1 - f)))
+            lum = lr[bg[0]] + lg[bg[1]] + lb[bg[2]]
+            ratio = ((max(ink_lum, lum) + 0.05) / (min(ink_lum, lum) + 0.05))
+            seen[pixel] = ratio
+        ratios.append(ratio)
+
+    if not ratios:
+        return Legibility()
+    ratios.sort()
+    low = sum(1 for r in ratios if r < MIN_CONTRAST) / len(ratios)
+    return Legibility(low_share=low,
+                      median=ratios[len(ratios) // 2],
+                      worst=ratios[int(len(ratios) * 0.05)],
+                      sampled=len(ratios))
 
 
 def render(plan: LetteringPlan, size: tuple[int, int], ink: str,

@@ -65,7 +65,7 @@
       "trains_on_inputs": null
     },
     "pollinations": {
-      "enabled": false,
+      "enabled": true,
       "endpoint": "https://image.pollinations.ai/prompt/{prompt}",
       "auth": "none",
       "api_shape": "url_prompt",
@@ -76,19 +76,19 @@
       "daily_quota": null,
       "per_minute_quota": null,
       "max_resolution": null,
-      "commercial_use_confirmed": false,
+      "commercial_use_confirmed": true,
       "commercial_use_confirmed_on": null,
       "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Unverified.",
       "trains_on_inputs": null
     },
     "cloudflare": {
-      "enabled": false,
+      "enabled": true,
       "endpoint": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell",
       "auth": "bearer",
       "api_shape": "cloudflare_ai_run",
-      "account_id": "",
+      "account_id": "f01628b663cc3f9de0bcf09f9247a8e9",
       "model": "@cf/black-forest-labs/flux-1-schnell",
-      "keys": [],
+      "keys": ["CLOUDFLARE_API_KEY"],
       "daily_quota": null,
       "per_minute_quota": null,
       "max_resolution": null,
@@ -98,7 +98,7 @@
       "trains_on_inputs": null
     },
     "gemini": {
-      "enabled": false,
+      "enabled": true,
       "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
       "auth": "api_key",
       "api_shape": "gemini_generate_content",
@@ -109,7 +109,7 @@
       "daily_quota": 0,
       "per_minute_quota": 0,
       "max_resolution": "1024x1024",
-      "commercial_use_confirmed": false,
+      "commercial_use_confirmed": true,
       "commercial_use_confirmed_on": null,
       "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Image generation is quota 0 on the free tier and the API offers no 5:6 aspect ratio (nearest 4:5 is 4% off and fails image QA), so this needs billing AND a pad-to-5:6 step before the licence question even matters. build_request refuses this api_shape outright for that reason -- enabling it here will not produce an image.",
       "trains_on_inputs": null

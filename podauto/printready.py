@@ -106,7 +106,18 @@ IGNORED_GROUND_PHRASE = "ignored the ground instruction"
 
 # Same contract as above: review.py matches on this substring, so rewording the
 # warning without rewording the constant silently reclassifies it as blocking.
+# This is the *measured pass* -- an overlay whose type was checked and reads. It
+# stays informational because it fires on every overlay that is fine, and a note on
+# every design is a note nobody reads.
 OVERLAY_LEGIBILITY_PHRASE = "position center_overlay"
+
+# The measured *failure*, and deliberately NOT on review.INFORMATIONAL_NOTES: an
+# overlay the contrast measurement says is unreadable is a defect in the file, so it
+# blocks the approval the way any unclassified note does. The trap this constant
+# exists to avoid is the two messages sharing wording -- the allowlist matches on
+# substrings, so a failure that happened to contain OVERLAY_LEGIBILITY_PHRASE would
+# be silently waved through as the pass it is not. Asserted in the tests.
+OVERLAY_CONTRAST_PHRASE = "overlaid type is low-contrast"
 
 PRINT_SUFFIX = "_print.png"
 
@@ -412,6 +423,45 @@ def fit_to_canvas(img: Image.Image, size: tuple[int, int] = (TARGET_W, TARGET_H)
     return canvas
 
 
+def _note_overlay(result: "PrintResult", layer: Image.Image,
+                  art: Image.Image, ink: str) -> None:
+    """Measure overlaid type against the art under it and say so, either way.
+
+    Both outcomes are reported. A silent pass would leave the reviewer unable to
+    tell a design that was checked from one produced before anything checked it,
+    and the pass note is also where the numbers live for the one judgement the
+    measurement cannot make -- whether the lockup looks right.
+
+    The failure is an ordinary qa_note, so it blocks the approval; the pass is on
+    review.INFORMATIONAL_NOTES and does not. That asymmetry is the entire gate.
+    """
+    read = _lettering.measure_contrast(layer, art, ink)
+    if not read.sampled:
+        # No glyph survived the reduction, so there is nothing to measure and
+        # nothing to claim. A plan that drew no type has already warned about it.
+        return
+
+    result.facts["overlay_contrast"] = (
+        f"median {read.median:.1f}:1, 5th pct {read.worst:.1f}:1, "
+        f"{read.low_share:.0%} below {_lettering.MIN_CONTRAST:.0f}:1")
+    if read.ok:
+        result.warnings.append(
+            f"typeset text is overlaid on the artwork rather than banded "
+            f"({OVERLAY_LEGIBILITY_PHRASE}) and measures {read.median:.1f}:1 "
+            f"against it, {read.low_share:.0%} of the type below "
+            f"{_lettering.MIN_CONTRAST:.0f}:1 -- it is spelled correctly by "
+            f"construction and it reads, so what is left to judge by eye is "
+            f"whether the lockup sits well on what the model painted")
+        return
+    result.warnings.append(
+        f"{OVERLAY_CONTRAST_PHRASE}: {read.low_share:.0%} of the typeset text "
+        f"is under {_lettering.MIN_CONTRAST:.0f}:1 against the artwork behind "
+        f"it (median {read.median:.1f}:1, 5th pct {read.worst:.1f}:1, limit "
+        f"{_lettering.MAX_LOW_CONTRAST:.0%}) -- the words will not read on the "
+        f"shirt. Set the style's ink explicitly, or band the text instead of "
+        f"overlaying it")
+
+
 def make_print_ready(src: str | Path, out: str | Path,
                      requested_ground: str | None = None,
                      method: str = "auto",
@@ -472,20 +522,9 @@ def make_print_ready(src: str | Path, out: str | Path,
                 result.facts["lettering_ink_source"] = how
             band = lettering.band_height(size)
             layer = _lettering.render(lettering, size, ink, band)
-            if not band:
-                # Nothing measures whether overlaid type is readable, and on a
-                # composited design the two halves were produced independently:
-                # measured on the first real run, one center_overlay design landed
-                # Anton over a busy dark illustration the model drew instead of the
-                # backdrop block its prompt asked for, and the words disappeared
-                # into it. Informational by classification -- it fires on every
-                # overlay, so blocking would make --force routine and waste the
-                # gate that catches a damaged file.
-                result.warnings.append(
-                    f"typeset text is overlaid on the artwork rather than banded "
-                    f"({OVERLAY_LEGIBILITY_PHRASE}) -- it is spelled correctly by "
-                    f"construction, so what to check is whether it reads against "
-                    f"what the model painted underneath")
+            # The overlay legibility note is NOT decided here. It depends on what
+            # the artwork looks like under the glyphs, and the artwork does not
+            # exist yet at this point -- see `_note_overlay` below.
             result.facts["lettering_band"] = band
         result.facts["lettering"] = (
             " ".join(f"{k}={v}" for k, v in lettering.facts.items()
@@ -522,6 +561,11 @@ def make_print_ready(src: str | Path, out: str | Path,
         seated.alpha_composite(final, (0, band if lettering.position == "above" else 0))
         final = seated
     if layer is not None:
+        if not band:
+            # The last moment both halves exist separately, which is the only
+            # moment the measurement is possible: one more line and the type is
+            # part of the artwork it was supposed to be measured against.
+            _note_overlay(result, layer, final, ink)
         final.alpha_composite(layer)
     result.facts["scaled"] = f"{scaled.width}x{scaled.height}"
     result.facts["canvas"] = f"{final.width}x{final.height}"

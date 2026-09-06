@@ -9,7 +9,6 @@ one record, which is the whole point.
 """
 
 from __future__ import annotations
-
 import hashlib
 import re
 import unicodedata
