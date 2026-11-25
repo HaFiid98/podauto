@@ -236,7 +236,7 @@ class Rotator:
                 ))
         return refs
 
-    def skip_reasons(self) -> dict[str, str]:
+    def skip_reasons(self, now: datetime | None = None) -> dict[str, str]:
         """Why each configured provider is unavailable. Surfaced in logs so a
         silent no-op is never mistaken for 'no work to do'.
 
@@ -244,15 +244,21 @@ class Rotator:
         with a confirmed licence and an empty variable is the failure most likely
         to look like a bug in the rotator rather than a missing export.
         """
+        now = now or datetime.now(timezone.utc)
         out: dict[str, str] = {}
-        for name in self.rotation.get("order", []):
+        order = self.rotation.get('order', [])
+        names = dict.fromkeys([*order, *self.config.get('providers', {})])
+        for name in names:
             cfg = self.config.get("providers", {}).get(name)
             if cfg is None:
                 out[name] = "not present in providers.json"
             elif not cfg.get("enabled"):
-                out[name] = "disabled"
+                out[name] = 'disabled' + (f' -- {cfg["disabled_reason"]}'
+                                          if cfg.get('disabled_reason') else '')
             elif not cfg.get("commercial_use_confirmed"):
                 out[name] = "commercial_use_confirmed is false -- verify licence and set it"
+            elif name not in order:
+                out[name] = 'not listed in rotation.order'
             else:
                 keys = self._keys_for(name, cfg)
                 if not keys:
@@ -260,6 +266,15 @@ class Rotator:
                 elif not any(k.env_var is None or k.secret for k in keys):
                     unset = ", ".join(k.env_var for k in keys if k.env_var)
                     out[name] = f"no key value in the environment (unset: {unset})"
+                else:
+                    available = [k for k in keys if k.env_var is None or k.secret]
+                    quota = cfg.get('daily_quota')
+                    if not any(k.ident not in self.ledger.exhausted
+                               and not self.ledger.is_cooling(k.ident, now)
+                               and (quota is None or self.ledger.used(k.ident) < quota)
+                               for k in available):
+                        out[name] = ('all keys exhausted, cooling down, or daily '
+                                     'quota reached' + (' (daily_quota=0)' if quota == 0 else ''))
         return out
 
     def candidates(self, now: datetime | None = None) -> Iterator[KeyRef]:
@@ -307,12 +322,13 @@ class Rotator:
             cfg = self.config["providers"][key.provider]
             try:
                 result = call(key, cfg)
-            except QuotaExhausted:
+            except QuotaExhausted as exc:
                 self.ledger.mark_exhausted(key.ident)
-                errors.append(f"{key.ident}: quota exhausted")
-            except RateLimited:
+                errors.append(f"{key.ident}: quota exhausted" + (f': {exc}' if str(exc) else ''))
+            except RateLimited as exc:
                 self.ledger.cool_down(key.ident, now, cooldown)
-                errors.append(f"{key.ident}: rate limited, cooling {cooldown}s")
+                errors.append(f"{key.ident}: rate limited, cooling {cooldown}s"
+                              + (f': {exc}' if str(exc) else ''))
             except Exception as exc:                      # noqa: BLE001
                 errors.append(f"{key.ident}: {type(exc).__name__}: {exc}")
             else:

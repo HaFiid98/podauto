@@ -15,7 +15,10 @@
       "Bash(bash /home/ahssaini/podauto/verify.sh)",
       "Bash(echo \"exit=$?\")",
       "Bash(chmod 600 .env)",
-      "Bash(python -m pytest tests/test_imagegen.py -q)"
+      "Bash(python -m pytest tests/test_imagegen.py -q)",
+      "Bash(command -v python3 uv pytest)",
+      "Bash(python3 -V)",
+      "Read(//home/ahssaini/podauto/.venv/**)"
     ]
   }
 }

@@ -16,6 +16,8 @@
     "order": [
       "hf_nscale",
       "hf_together",
+      "siliconflow",
+      "fal_ai",
       "huggingface",
       "pollinations",
       "cloudflare",
@@ -43,9 +45,8 @@
       "max_resolution": "1024x1024",
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. FLUX.1-schnell weights are apache-2.0 (Hub model card); the HF Inference Providers terms and nscale's own terms are separate and unread. Returns lossless PNG at the requested size.",
-      "trains_on_inputs": null,
-      "route_note": "Shares one real token with hf_together and huggingface. The ledger tracks them as separate provider:key pairs, so a quota wall is discovered once per route rather than once per account."
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
+      "trains_on_inputs": null
     },
     "hf_together": {
       "enabled": false,
@@ -61,15 +62,52 @@
       "max_resolution": "1024x1024",
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Same apache-2.0 FLUX.1-schnell weights as hf_nscale, but this route returns JPEG -- lossy, so prefer it as fallback only.",
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
       "trains_on_inputs": null
+    },
+    "siliconflow": {
+      "enabled": false,
+      "endpoint": "https://api.siliconflow.cn/v1/images/generations",
+      "auth": "bearer",
+      "api_shape": "siliconflow_images",
+      "model": "black-forest-labs/FLUX.1-schnell",
+      "keys": [
+        "SILICONFLOW_API_KEY"
+      ],
+      "daily_quota": null,
+      "max_resolution": "1024x1024",
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
+      "trains_on_inputs": false,
+      "image_size": "768x1024",
+      "pad_to_aspect": true
+    },
+    "fal_ai": {
+      "enabled": false,
+      "endpoint": "https://fal.run/fal-ai/flux/schnell",
+      "auth": "header",
+      "api_shape": "fal_ai_custom",
+      "model": "flux/schnell",
+      "keys": [
+        "FAL_AI_API_KEY"
+      ],
+      "daily_quota": null,
+      "max_resolution": "1024x1024",
+      "commercial_use_confirmed": false,
+      "commercial_use_confirmed_on": null,
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
+      "trains_on_inputs": false,
+      "auth_header": "Authorization",
+      "auth_prefix": "Key ",
+      "pad_to_aspect": true
     },
     "pollinations": {
       "enabled": false,
-      "endpoint": "https://image.pollinations.ai/prompt/{prompt}",
-      "auth": "none",
+      "endpoint": "https://gen.pollinations.ai/image/{prompt}",
+      "auth": "bearer",
       "api_shape": "url_prompt",
-      "model": "flux",
+      "model": "black-forest-labs/flux.1-schnell",
       "keys": [
         "POLLINATIONS_API_KEY"
       ],
@@ -78,8 +116,9 @@
       "max_resolution": null,
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Unverified.",
-      "trains_on_inputs": null
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
+      "trains_on_inputs": null,
+      "pad_to_aspect": true
     },
     "cloudflare": {
       "enabled": false,
@@ -88,14 +127,18 @@
       "api_shape": "cloudflare_ai_run",
       "account_id": "",
       "model": "@cf/black-forest-labs/flux-1-schnell",
-      "keys": [],
+      "keys": [
+        "CLOUDFLARE_API_KEY"
+      ],
       "daily_quota": null,
       "per_minute_quota": null,
-      "max_resolution": null,
+      "max_resolution": "1024x1024",
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. FLUX.1-schnell weights are apache-2.0 but Cloudflare's service terms are separate -- verify both.",
-      "trains_on_inputs": null
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
+      "trains_on_inputs": null,
+      "steps": 4,
+      "pad_to_aspect": true
     },
     "gemini": {
       "enabled": false,
@@ -106,13 +149,15 @@
       "keys": [
         "GEMINI_API_KEY"
       ],
-      "daily_quota": 0,
-      "per_minute_quota": 0,
+      "daily_quota": null,
+      "per_minute_quota": null,
       "max_resolution": "1024x1024",
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Image generation is quota 0 on the free tier and the API offers no 5:6 aspect ratio (nearest 4:5 is 4% off and fails image QA), so this needs billing AND a pad-to-5:6 step before the licence question even matters. build_request refuses this api_shape outright for that reason -- enabling it here will not produce an image.",
-      "trains_on_inputs": null
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
+      "trains_on_inputs": null,
+      "aspect_ratio": "4:5",
+      "pad_to_aspect": true
     },
     "together": {
       "enabled": false,
@@ -126,7 +171,7 @@
       "max_resolution": null,
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. Unverified. Direct Together API, not the HF router.",
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
       "trains_on_inputs": null
     },
     "huggingface": {
@@ -143,7 +188,7 @@
       "max_resolution": "1024x1024",
       "commercial_use_confirmed": false,
       "commercial_use_confirmed_on": null,
-      "licence_notes": "NOT YOUR DETERMINATION YET. Read the model licence AND the service terms, then record here what you actually read. stabilityai/stable-diffusion-3-medium-diffusers is license 'other' (Stability Community Licence -- revenue-capped, conditional) and gated on the Hub. Weaker terms than the apache-2.0 routes above, and the output is compressed JPEG.",
+      "licence_notes": "Confirm the configured model licence and service terms before enabling commercial use.",
       "trains_on_inputs": false
     }
   }

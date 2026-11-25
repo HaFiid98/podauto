@@ -31,14 +31,14 @@ from pathlib import Path
 
 from .content_policy import ContentPolicy, check_record
 from .env import load_env_file
-from .imagegen import generate_for_record
+from .imagegen import ProviderNotConfigured, build_request, generate_for_record
 from .imageqa import qa_record
 from .ingest import ingest, load_rows
 from .listing import generate as generate_listing
 from .models import ContentPolicyStatus, Gate, PipelineStatus, TmStatus
 from .printready import GROUND_TOLERANCE, printready_record
 from .prompts import StyleDatabase, synthesize
-from .providers import Rotator
+from .providers import ConfigError, Rotator
 from .review import ReviewError, decide, export, resolve
 from .scoring import score
 from .store import Store
@@ -509,6 +509,31 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_providers(args) -> int:
+    """Show provider eligibility and adapter readiness without making API calls."""
+    rotator = Rotator.from_files(args.providers, args.ledger)
+    reasons = rotator.skip_reasons()
+    keys = {}
+    for key in rotator.candidates():
+        keys.setdefault(key.provider, key)
+    for name, cfg in rotator.config.get('providers', {}).items():
+        if name in reasons:
+            print(f'  {name}: skipped -- {reasons[name]}')
+            continue
+        key = keys.get(name)
+        if key is None:
+            print(f'  {name}: no eligible key')
+            continue
+        try:
+            build_request(name, cfg, key, 'configuration check')
+        except ProviderNotConfigured as exc:
+            print(f'  {name}: not configured -- {exc}')
+        else:
+            print(f'  {name}: configured ({cfg["api_shape"]})')
+    print('Configuration check only; API authentication and availability require a live request.')
+    return 0
+
+
 def cmd_run(args) -> int:
     """The free stages, in cost-ascending order.
 
@@ -607,6 +632,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("status", cmd_status, "record counts by pipeline stage")
 
+    sp = add('providers', cmd_providers, 'check provider configuration without API calls')
+    sp.add_argument('--providers', default=DEFAULT_PROVIDERS)
+    sp.add_argument('--ledger', default=DEFAULT_LEDGER)
+
     sp = add("run", cmd_run, "all stages in order")
     sp.add_argument("input", help="CSV or JSON file")
     sp.add_argument("--denylist", default=DEFAULT_DENYLIST)
@@ -624,7 +653,11 @@ def main(argv: list[str] | None = None) -> int:
     # every provider skips with "no key value in the environment".
     load_env_file()
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ConfigError as exc:
+        print(f'configuration error: {exc}', file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

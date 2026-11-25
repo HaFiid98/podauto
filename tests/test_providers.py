@@ -287,3 +287,26 @@ def test_enabled_provider_with_an_unset_variable_says_which_one(monkeypatch, led
     rot = Rotator(c, ledger)
     assert list(rot.candidates(NOW)) == []
     assert "MISSING_KEY" in rot.skip_reasons()["alpha"]
+
+
+def test_enabled_provider_outside_rotation_has_a_visible_reason(env, ledger):
+    c = cfg()
+    c['rotation']['order'] = ['beta']
+    rot = Rotator(c, ledger)
+    assert rot.skip_reasons(NOW)['alpha'] == 'not listed in rotation.order'
+
+
+def test_zero_quota_is_reported_as_unavailable(env, ledger):
+    c = cfg()
+    c['providers']['alpha']['daily_quota'] = 0
+    rot = Rotator(c, ledger)
+    assert 'daily_quota=0' in rot.skip_reasons(NOW)['alpha']
+
+
+def test_cooling_keys_are_visible_until_the_cooldown_ends(env, ledger):
+    ledger.cool_down('alpha:a1', NOW, 60)
+    ledger.cool_down('alpha:a2', NOW, 60)
+    rot = Rotator(cfg(), ledger)
+    assert 'cooling' in rot.skip_reasons(NOW)['alpha']
+    from datetime import timedelta
+    assert 'alpha' not in rot.skip_reasons(NOW + timedelta(seconds=61))

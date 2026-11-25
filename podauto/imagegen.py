@@ -16,9 +16,9 @@ Three things about this module are deliberate.
   call is recoverable; a guess that silently saves 200 bytes of JSON as a .png
   is not.
 
-* **Response handling is keyed on `api_shape`, not on provider name.** Four
-  shapes cover the five configured providers, so adding a sixth that speaks an
-  existing dialect is a config edit.
+* **Response handling is keyed on `api_shape`, not on provider name.** Adapters
+  cover raw images, inline base64 and downloadable image URLs. Providers with
+  fixed aspect ratios are padded locally without cropping the artwork.
 
 * **5xx retries happen here, not in the Rotator.** providers.json says
   `on_http_5xx: retry_same_key_twice_then_advance`, and the Rotator has no
@@ -29,14 +29,17 @@ Three things about this module are deliberate.
 from __future__ import annotations
 
 import base64
+import io
+import math
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
+from PIL import Image
 
 from .models import PipelineStatus, Record
 from .providers import (
@@ -172,6 +175,11 @@ def _decode_b64(text: str) -> bytes | None:
     """Decode a base64 string only if the result is an image."""
     if not isinstance(text, str) or len(text) < 64:
         return None
+    if text.startswith('data:image/'):
+        header, separator, payload = text.partition(',')
+        if not separator or not header.endswith(';base64'):
+            return None
+        text = payload
     try:
         blob = base64.b64decode(text, validate=False)
     except Exception:                                  # noqa: BLE001
@@ -210,7 +218,29 @@ def find_image_in_json(node: Any, depth: int = 0) -> bytes | None:
     return None
 
 
-def extract_image(response: httpx.Response) -> bytes:
+def _image_url(node: Any, depth: int = 0) -> str | None:
+    """Read URLs only from image-result fields, not error messages or metadata."""
+    if depth > 8:
+        return None
+    if isinstance(node, str):
+        parsed = urlparse(node)
+        if parsed.scheme == 'https' and parsed.hostname and not parsed.username:
+            return node
+    elif isinstance(node, list):
+        for item in node:
+            found = _image_url(item, depth + 1)
+            if found:
+                return found
+    elif isinstance(node, dict):
+        for field in ('url', 'images', 'image', 'data', 'result', 'output'):
+            if field in node:
+                found = _image_url(node[field], depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def extract_image(response: httpx.Response, client: httpx.Client | None = None) -> bytes:
     """Pull image bytes out of a response, or say precisely what arrived instead."""
     if image_kind(response.content):
         return response.content
@@ -229,11 +259,47 @@ def extract_image(response: httpx.Response) -> bytes:
     if found:
         return found
 
+    url = _image_url(body)
+    if url and client is not None:
+        # A storage/CDN URL does not receive the generation provider's key.
+        download = client.send(httpx.Request('GET', url, headers={'Accept': 'image/*'}),
+                               auth=None, follow_redirects=True)
+        failure = classify_failure(download.status_code, download.content)
+        if failure:
+            raise failure
+        if image_kind(download.content):
+            return download.content
+        raise UnexpectedResponse('Image download returned a non-image payload')
+
     shape = sorted(body.keys()) if isinstance(body, dict) else type(body).__name__
     raise UnexpectedResponse(
         f"no image found in JSON response. top-level shape: {shape}. "
-        f"first 200 chars: {str(body)[:200]!r}"
+        'expected raw image bytes, inline base64, or an HTTPS image URL'
     )
+
+
+def pad_to_aspect(blob: bytes) -> bytes:
+    """Add a matching ground around fixed-ratio output; preserve every art pixel."""
+    from .printready import border_colour
+
+    with Image.open(io.BytesIO(blob)) as source:
+        source.load()
+        width, height = source.size
+        if abs(width / height - ASPECT_W / ASPECT_H) <= 0.02:
+            return blob
+        target_w = max(width, math.ceil(height * ASPECT_W / ASPECT_H))
+        target_h = max(height, math.ceil(width * ASPECT_H / ASPECT_W))
+        has_alpha = 'A' in source.getbands() or 'transparency' in source.info
+        image = source.convert('RGBA' if has_alpha else 'RGB')
+        ground = border_colour(image)
+        if has_alpha:
+            ground = ((*ground, 255) if image.getchannel('A').getextrema()[0] == 255
+                      else (0, 0, 0, 0))
+        canvas = Image.new(image.mode, (target_w, target_h), ground)
+        canvas.paste(image, ((target_w - width) // 2, (target_h - height) // 2))
+        out = io.BytesIO()
+        canvas.save(out, format='PNG')
+        return out.getvalue()
 
 
 # --- request building ---------------------------------------------------
@@ -263,7 +329,7 @@ def apply_auth(req: Request, cfg: dict[str, Any], key: KeyRef) -> None:
     elif kind == "api_key":
         req.headers[cfg.get("auth_header", "x-goog-api-key")] = secret
     elif kind == "header":
-        req.headers[cfg.get("auth_header", "Authorization")] = secret
+        req.headers[cfg.get("auth_header", "Authorization")] = cfg.get('auth_prefix', '') + secret
     elif kind == "query":
         req.params[cfg.get("auth_param", "key")] = secret
 
@@ -271,10 +337,8 @@ def apply_auth(req: Request, cfg: dict[str, Any], key: KeyRef) -> None:
 def build_request(name: str, cfg: dict[str, Any], key: KeyRef, prompt: str) -> Request:
     """Translate (provider config, key, prompt) into one HTTP request.
 
-    api_shape names the dialect. The four that build a request cover six of the
-    seven configured providers, so another that speaks an existing dialect is a
-    config edit. The fifth, gemini_generate_content, is recognised and refused --
-    measured, it cannot serve this pipeline.
+    api_shape names the dialect. Account quotas and credentials are checked by
+    the provider, rather than inferred from a historical test of another account.
     """
     require_ready(name, cfg)
     shape = cfg["api_shape"]
@@ -286,31 +350,17 @@ def build_request(name: str, cfg: dict[str, Any], key: KeyRef, prompt: str) -> R
         # Prompt travels in the path; the response body is the image itself.
         url = endpoint.replace("{prompt}", quote(prompt, safe=""))
         req = Request("GET", url, params={
-            "width": width, "height": height, "nologo": "true", "model": model or "flux",
+            "width": width, "height": height, "model": model or "flux",
         })
     elif shape == "gemini_generate_content":
-        # Unimplemented on purpose, and refusing rather than left half-built.
-        # Measured 2026-08-16 against the live API with a valid key (ListModels
-        # returned 53 models, so this is not an auth problem):
-        #   * image generation is quota 0 without billing -- 429 carrying
-        #     "limit: 0, model: gemini-2.5-flash-preview-image";
-        #   * the aspect-ratio enum has no 5:6. Nearest is 4:5, 4% off, and
-        #     imageqa.ASPECT_TOLERANCE is 0.02 -- so even a billed account would
-        #     return files this pipeline rejects until something pads 4:5 to 5:6,
-        #     a step that does not exist.
-        # A body that could actually return an image needs responseModalities
-        # and imageConfig. Adding them would buy a billed call whose output fails
-        # QA by construction, so this raises instead: Rotator.generate records
-        # the reason verbatim and advances to the next provider, and nobody has
-        # to debug a request that was never going to work. The evidence is also
-        # in the gemini licence_notes in config/providers.json.
-        raise ProviderNotConfigured(
-            f"{name}: gemini image generation is not implemented, deliberately. "
-            f"The API offers no 5:6 aspect ratio (nearest 4:5 is 4% off, image "
-            f"QA allows 2%) and image quota is 0 without billing, so even a "
-            f"correct request would produce a file this pipeline rejects. "
-            f"Nothing was called."
-        )
+        image_config = {'aspectRatio': cfg.get('aspect_ratio', '4:5')}
+        if cfg.get('image_size'):
+            image_config['imageSize'] = cfg['image_size']
+        req = Request('POST', endpoint.replace('{model}', model), json_body={
+            'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+            'generationConfig': {'responseModalities': ['TEXT', 'IMAGE'],
+                                 'imageConfig': image_config},
+        })
     elif shape == "hf_text_to_image":
         req = Request("POST", endpoint.replace("{model}", model), json_body={
             "inputs": prompt,
@@ -331,15 +381,30 @@ def build_request(name: str, cfg: dict[str, Any], key: KeyRef, prompt: str) -> R
     elif shape == "cloudflare_ai_run":
         url = (endpoint.replace("{account_id}", str(cfg.get("account_id", "")))
                        .replace("{model}", model))
-        req = Request("POST", url, json_body={
-            "prompt": prompt, "width": width, "height": height,
+        body = {'prompt': prompt}
+        if model.endswith('/flux-1-schnell'):
+            # This model's schema accepts prompt/steps, not width/height.
+            body['steps'] = cfg.get('steps', 4)
+        else:
+            body.update(width=width, height=height)
+        req = Request('POST', url, json_body=body)
+    elif shape == 'fal_ai_custom':
+        req = Request('POST', endpoint, json_body={
+            'prompt': prompt, 'image_size': {'width': width, 'height': height},
+            'num_images': 1, 'num_inference_steps': cfg.get('num_inference_steps', 4),
+            'output_format': 'png', 'sync_mode': True,
+        })
+    elif shape == 'siliconflow_images':
+        req = Request('POST', endpoint, json_body={
+            'model': model, 'prompt': prompt,
+            'image_size': cfg.get('image_size', '768x1024'),
         })
     else:
         raise ProviderNotConfigured(
             f"{name}: unknown api_shape {shape!r}. Shapes that produce an "
             f"image: url_prompt, hf_text_to_image, openai_images, "
-            f"cloudflare_ai_run. gemini_generate_content is recognised and "
-            f"refused -- see the branch above for why."
+            'cloudflare_ai_run, fal_ai_custom, siliconflow_images, '
+            'gemini_generate_content.'
         )
 
     req.headers.setdefault("Accept", "image/png, application/json")
@@ -359,13 +424,15 @@ def classify_failure(status: int, body: bytes) -> Exception | None:
     """
     if status < 400:
         return None
-    text = body[:2000].decode("utf-8", "replace").lower()
+    text = (f'provider returned an error image (HTTP {status})' if image_kind(body)
+            else body[:2000].decode('utf-8', 'replace').lower())
     quota_ish = any(m in text for m in QUOTA_MARKERS)
 
     if status == 429:
-        return QuotaExhausted() if quota_ish else RateLimited()
+        detail = f'HTTP {status}: {text[:700]}'
+        return QuotaExhausted(detail) if quota_ish else RateLimited(detail)
     if status in (402, 403) and quota_ish:
-        return QuotaExhausted()
+        return QuotaExhausted(f'HTTP {status}: {text[:700]}')
     return ProviderHttpError(f"HTTP {status}: {text[:200]}")
 
 
@@ -382,17 +449,27 @@ def call_provider(client: httpx.Client, name: str, cfg: dict[str, Any],
     req = build_request(name, cfg, key, prompt)
 
     for attempt in range(retries_5xx + 1):
-        response = client.request(
-            req.method, req.url, headers=req.headers,
-            params=req.params or None, json=req.json_body,
-        )
+        try:
+            response = client.request(
+                req.method, req.url, headers=req.headers,
+                params=req.params or None, json=req.json_body,
+            )
+        except httpx.RequestError as exc:
+            raise ProviderHttpError(f'{name}: network request failed ({type(exc).__name__})') from None
         if 500 <= response.status_code < 600 and attempt < retries_5xx:
             sleep(2 ** attempt)
             continue
         failure = classify_failure(response.status_code, response.content)
         if failure:
             raise failure
-        return extract_image(response)
+        try:
+            blob = extract_image(response, client)
+        except httpx.RequestError as exc:
+            raise ProviderHttpError(f'{name}: image download failed ({type(exc).__name__})') from None
+        if cfg.get('pad_to_aspect', cfg['api_shape'] in
+                   ('gemini_generate_content', 'cloudflare_ai_run', 'siliconflow_images')):
+            blob = pad_to_aspect(blob)
+        return blob
 
     raise UnexpectedResponse(f"{name}: exhausted 5xx retries")       # unreachable
 

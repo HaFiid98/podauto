@@ -147,6 +147,35 @@ STUB_PROVIDERS = {
 }
 
 
+def test_provider_check_makes_no_api_request_or_displays_credentials(tmp_path,
+                                                                  monkeypatch, capsys):
+    monkeypatch.setenv('STUB_KEY', 'private-test-key')
+    config = tmp_path / 'providers.json'
+    config.write_text(json.dumps(STUB_PROVIDERS))
+
+    def forbid_network(*args, **kwargs):
+        raise AssertionError('Provider configuration checks must not open an HTTP client')
+
+    monkeypatch.setattr(httpx, 'Client', forbid_network)
+    assert main(['providers', '--providers', str(config), '--ledger',
+                 str(tmp_path / 'ledger.json')]) == 0
+    output = capsys.readouterr().out
+    assert 'stub: configured' in output
+    assert 'private-test-key' not in output
+
+
+def test_bad_provider_config_returns_a_clear_cli_error(tmp_path, capsys):
+    config = tmp_path / 'providers.json'
+    data = json.loads(json.dumps(STUB_PROVIDERS))
+    data['providers']['stub']['keys'] = ['hf_not_an_env_name']
+    config.write_text(json.dumps(data))
+    assert main(['providers', '--providers', str(config), '--ledger',
+                 str(tmp_path / 'ledger.json')]) == 2
+    error = capsys.readouterr().err
+    assert 'configuration error:' in error and 'environment variable' in error
+    assert 'hf_not_an_env_name' not in error
+
+
 def png_response(size=(848, 1024), blank=False) -> httpx.Response:
     """848x1024 is what native_size() asks for at a 1024 cap, so a passing
     fixture has to be that size -- imageqa checks the aspect the request used."""

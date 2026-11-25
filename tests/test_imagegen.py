@@ -28,6 +28,7 @@ from podauto.imagegen import (
     generate_for_record,
     image_kind,
     native_size,
+    pad_to_aspect,
     require_ready,
 )
 from podauto.models import IdeaType, PipelineStatus, Record, SourcePlatform, StyleVariation
@@ -178,32 +179,51 @@ def test_keyless_provider_sends_no_credential():
     assert "Authorization" not in req.headers
 
 
-def test_the_gemini_shape_refuses_instead_of_building_a_request():
-    """Measured 2026-08-16, not guessed: the Gemini API has no 5:6 aspect ratio
-    (nearest 4:5 is 4% off against imageqa's 2% gate) and image generation is
-    quota 0 without billing. A request that could return an image would still
-    return one this pipeline rejects, so the branch refuses before the call and
-    says why -- the alternative is a plausible-looking POST whose failure reads
-    as a network fault. Both facts belong in the message: someone who enables
-    billing would otherwise fix only half the problem.
-    """
-    with pytest.raises(ProviderNotConfigured) as exc:
-        build_request("gemini", dict(
-            READY, auth="api_key", api_shape="gemini_generate_content"),
-            key(), "a cat")
-    assert "5:6" in str(exc.value)
-    assert "billing" in str(exc.value)
-    assert "Nothing was called" in str(exc.value)
+def test_gemini_requests_image_output_with_a_supported_aspect_ratio():
+    req = build_request('gemini', dict(
+        READY, auth='api_key', api_shape='gemini_generate_content'), key(), 'a cat')
+    assert '{model}' not in req.url
+    assert req.json_body['contents'][0]['parts'] == [{'text': 'a cat'}]
+    generation = req.json_body['generationConfig']
+    assert generation['responseModalities'] == ['TEXT', 'IMAGE']
+    assert generation['imageConfig'] == {'aspectRatio': '4:5'}
 
 
-def test_an_unknown_shape_is_not_offered_gemini_as_an_option():
-    """The shape list in that error is what someone reads after a typo, so it
-    must not point at the one shape that cannot generate."""
+def test_an_unknown_shape_lists_the_implemented_image_adapters():
     with pytest.raises(ProviderNotConfigured) as exc:
         build_request("x", dict(READY, api_shape="hf_text_to_imag"), key(), "a cat")
     msg = str(exc.value)
     assert "hf_text_to_image" in msg
-    assert "recognised and refused" in msg
+    assert 'gemini_generate_content' in msg
+    assert 'fal_ai_custom' in msg
+    assert 'siliconflow_images' in msg
+
+
+def test_cloudflare_flux_does_not_send_rejected_dimension_fields():
+    cfg = dict(READY, api_shape='cloudflare_ai_run',
+               endpoint='https://example.test/accounts/{account_id}/ai/run/{model}',
+               account_id='account', model='@cf/black-forest-labs/flux-1-schnell')
+    req = build_request('cloudflare', cfg, key(), 'a cat')
+    assert req.json_body == {'prompt': 'a cat', 'steps': 4}
+    assert '{account_id}' not in req.url and '{model}' not in req.url
+
+
+def test_fal_uses_key_auth_and_custom_image_size(monkeypatch):
+    monkeypatch.setenv('ALPHA_KEY', 's3cret')
+    cfg = dict(READY, api_shape='fal_ai_custom', auth='header',
+               auth_prefix='Key ', auth_header='Authorization')
+    req = build_request('fal', cfg, key(), 'a cat')
+    assert req.headers['Authorization'] == 'Key s3cret'
+    assert req.json_body['image_size'] == {'width': 848, 'height': 1024}
+    assert req.json_body['num_images'] == 1
+    assert req.json_body['sync_mode'] is True
+
+
+def test_siliconflow_uses_its_image_size_field():
+    req = build_request('siliconflow', dict(READY, api_shape='siliconflow_images'),
+                        key(), 'a cat')
+    assert req.json_body == {'model': 'some/model', 'prompt': 'a cat',
+                             'image_size': '768x1024'}
 
 
 def test_openai_images_shape_asks_for_base64():
@@ -247,6 +267,75 @@ def test_base64_is_found_wherever_the_response_puts_it():
     ]
     for body in bodies:
         assert image_kind(extract_image(httpx.Response(200, json=body))) == "png"
+
+
+def test_fal_inline_data_uri_is_decoded():
+    blob = png_bytes()
+    data_uri = 'data:image/png;base64,' + base64.b64encode(blob).decode()
+    assert extract_image(httpx.Response(200, json={'images': [{'url': data_uri}]})) == blob
+
+
+def test_downloaded_image_does_not_receive_provider_authentication(monkeypatch):
+    monkeypatch.setenv('ALPHA_KEY', 's3cret')
+    seen = []
+    client = client_returning(
+        httpx.Response(200, json={'images': [{'url': 'https://cdn.test/art.png'}]}),
+        httpx.Response(200, content=png_bytes()), record=seen)
+    client.headers['Authorization'] = 'Bearer client-default'
+    got = call_provider(client, 'siliconflow', dict(READY, api_shape='siliconflow_images'),
+                        key(), 'a cat')
+    assert image_kind(got) == 'png'
+    assert seen[0].headers['Authorization'] == 'Bearer s3cret'
+    assert seen[1].url.host == 'cdn.test'
+    assert 'Authorization' not in seen[1].headers
+
+
+def test_image_download_rejects_a_storage_error():
+    client = client_returning(
+        httpx.Response(200, json={'images': [{'url': 'https://cdn.test/art.png'}]}),
+        httpx.Response(200, content=b'<html>storage error</html>'))
+    with pytest.raises(UnexpectedResponse, match='non-image'):
+        call_provider(client, 'hf', READY, key(), 'a cat')
+
+
+def test_error_metadata_url_is_not_downloaded():
+    seen = []
+    client = client_returning(httpx.Response(200, json={
+        'error': {'url': 'https://help.test/error'}}), record=seen)
+    with pytest.raises(UnexpectedResponse):
+        call_provider(client, 'hf', READY, key(), 'a cat')
+    assert len(seen) == 1
+
+
+def test_fixed_ratio_image_is_padded_without_cropping_or_resizing():
+    source = Image.new('RGB', (100, 100), 'magenta')
+    source.paste('navy', (20, 20, 80, 80))
+    buffer = io.BytesIO()
+    source.save(buffer, format='PNG')
+    with Image.open(io.BytesIO(pad_to_aspect(buffer.getvalue()))) as padded:
+        assert padded.size == (100, 120)
+        assert padded.crop((0, 10, 100, 110)).tobytes() == source.tobytes()
+        assert padded.getpixel((0, 0)) == (255, 0, 255)
+
+
+def test_padding_preserves_transparency():
+    source = Image.new('RGBA', (100, 100), (20, 40, 60, 0))
+    source.paste((20, 40, 60, 255), (20, 20, 80, 80))
+    buffer = io.BytesIO()
+    source.save(buffer, format='PNG')
+    with Image.open(io.BytesIO(pad_to_aspect(buffer.getvalue()))) as padded:
+        assert padded.getpixel((0, 0))[3] == 0
+        assert padded.crop((0, 10, 100, 110)).tobytes() == source.tobytes()
+
+
+def test_gemini_generated_art_is_padded_to_the_pipeline_aspect():
+    b64 = base64.b64encode(png_bytes(size=(100, 125))).decode()
+    response = httpx.Response(200, json={'candidates': [{'content': {'parts': [
+        {'inlineData': {'mimeType': 'image/png', 'data': b64}}]}}]})
+    got = call_provider(client_returning(response), 'gemini',
+                        dict(READY, api_shape='gemini_generate_content'), key(), 'a cat')
+    with Image.open(io.BytesIO(got)) as image:
+        assert abs(image.width / image.height - 5 / 6) <= 0.02
 
 
 def test_a_base64_field_that_is_not_an_image_is_refused():
@@ -296,6 +385,12 @@ def test_a_429_that_says_quota_retires_the_key():
     assert isinstance(classify_failure(429, body), QuotaExhausted)
 
 
+def test_account_quota_error_keeps_the_providers_explanation():
+    error = classify_failure(403, b'{"detail": "Account locked: out of credits"}')
+    assert isinstance(error, QuotaExhausted)
+    assert 'out of credits' in str(error) and '403' in str(error)
+
+
 def test_402_and_403_are_quota_only_when_the_body_says_so():
     assert isinstance(classify_failure(402, b"out of credits"), QuotaExhausted)
     assert isinstance(classify_failure(403, b"billing required"), QuotaExhausted)
@@ -307,6 +402,12 @@ def test_other_failures_keep_the_status_and_body_in_the_message():
     err = classify_failure(400, b"model not found: some/model")
     assert isinstance(err, ProviderHttpError)
     assert "400" in str(err) and "model not found" in str(err)
+
+
+def test_provider_error_images_do_not_turn_into_binary_log_messages():
+    err = classify_failure(503, png_bytes())
+    assert isinstance(err, ProviderHttpError)
+    assert 'error image' in str(err) and '\\x89' not in str(err)
 
 
 def test_success_classifies_as_no_failure():
